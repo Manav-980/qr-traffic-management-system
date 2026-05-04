@@ -19,7 +19,11 @@
        Send WhatsApp Alert
     </a>
 
-    
+    <a class="btn secondary full"
+       href="{{ url_for('download_qr', vehicle_id=vehicle.id) }}">
+       Download QR Code
+    </a>
+
     <p class="warning-text">
         Please use this information only for traffic blockage or emergency vehicle contact.
     </p>

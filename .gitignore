@@ -1,13 +1,8 @@
-# database
-traffic.db
-
-# qr images
-static/qr_codes/
-
-# env
 .env
-
-# python
+.venv/
 __pycache__/
 *.pyc
-.venv/
+traffic.db
+*.db
+static/qr_codes/
+exports/
