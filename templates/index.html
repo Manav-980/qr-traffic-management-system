@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="hero">
+    <div>
+        <h1>QR-Based Traffic Management System</h1>
+        <p>
+            Users can register, login, add their vehicles, and generate QR codes.
+            Anyone scanning the QR can contact the vehicle owner during traffic blockage.
+        </p>
+
+        <div class="hero-buttons">
+            <a class="btn primary" href="{{ url_for('user_register') }}">User Register</a>
+            <a class="btn secondary" href="{{ url_for('user_login') }}">User Login</a>
+            <a class="btn secondary" href="{{ url_for('admin_login') }}">Admin Login</a>
+        </div>
+    </div>
+</section>
+
+<section id="features" class="cards">
+    <div class="card">
+        <h3>👤 User Account</h3>
+        <p>Vehicle owners can register and login to manage their own vehicles.</p>
+    </div>
+
+    <div class="card">
+        <h3>🚗 Add Vehicle</h3>
+        <p>Users can add vehicle number and generate QR code automatically.</p>
+    </div>
+
+    <div class="card">
+        <h3>📱 QR Alert</h3>
+        <p>QR scan opens owner details with call and WhatsApp alert options.</p>
+    </div>
+</section>
+{% endblock %}

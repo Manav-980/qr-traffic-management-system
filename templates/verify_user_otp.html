@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="form-card small">
+    <h2>Verify OTP</h2>
+
+    <p class="hint">
+        We sent an OTP to your registered mobile number.
+    </p>
+
+    <form method="POST">
+        <label>Enter OTP</label>
+        <input type="text" name="otp" placeholder="Enter 6-digit OTP" required>
+
+        <button class="btn primary full" type="submit">Verify & Create Account</button>
+    </form>
+
+    <p class="hint">
+        Didn't receive OTP?
+        <a href="{{ url_for('resend_user_otp') }}">Resend OTP</a>
+    </p>
+
+    <p class="hint">
+        In demo mode, use OTP: <strong>123456</strong>
+    </p>
+</div>
+{% endblock %}

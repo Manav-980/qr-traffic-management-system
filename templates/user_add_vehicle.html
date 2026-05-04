@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="form-card">
+    <h2>Add My Vehicle</h2>
+
+    <form method="POST">
+        <label>Vehicle Number</label>
+        <input type="text" name="vehicle_no" placeholder="Example: UK07AB1234" required>
+
+        <label>Address / Parking Area</label>
+        <textarea name="address" placeholder="Enter address or parking area"></textarea>
+
+        <button class="btn primary full" type="submit">Generate QR & Save</button>
+    </form>
+</div>
+{% endblock %}

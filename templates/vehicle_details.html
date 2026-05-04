@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="public-card">
+    <h2>Vehicle Owner Details</h2>
+
+    <div class="vehicle-box">
+        <p><strong>Vehicle Number:</strong> {{ vehicle.vehicle_no }}</p>
+        <p><strong>Owner Name:</strong> {{ vehicle.owner_name }}</p>
+        <p><strong>Phone:</strong> <a href="tel:{{ vehicle.phone }}">{{ vehicle.phone }}</a></p>
+        <p><strong>Address:</strong> {{ vehicle.address or "Not available" }}</p>
+    </div>
+
+    <a class="btn primary full" href="tel:{{ vehicle.phone }}">Call Owner</a>
+
+    <a class="btn whatsapp full"
+       target="_blank"
+       href="https://wa.me/91{{ vehicle.phone }}?text=Hello%20{{ vehicle.owner_name }},%20your%20vehicle%20{{ vehicle.vehicle_no }}%20is%20blocking%20traffic.%20Please%20move%20it.">
+       Send WhatsApp Alert
+    </a>
+
+    
+    <p class="warning-text">
+        Please use this information only for traffic blockage or emergency vehicle contact.
+    </p>
+</div>
+{% endblock %}

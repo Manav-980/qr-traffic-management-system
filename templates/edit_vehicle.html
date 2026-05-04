@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="form-card">
+    <h2>Edit Vehicle</h2>
+
+    <form method="POST">
+        <label>Vehicle Number</label>
+        <input type="text" name="vehicle_no" value="{{ vehicle.vehicle_no }}" required>
+
+        <label>Owner Name</label>
+        <input type="text" name="owner_name" value="{{ vehicle.owner_name }}" required>
+
+        <label>Phone Number</label>
+        <input type="text" name="phone" value="{{ vehicle.phone }}" required>
+
+        <label>Address</label>
+        <textarea name="address">{{ vehicle.address }}</textarea>
+
+        <button class="btn primary full" type="submit">Update Vehicle</button>
+    </form>
+</div>
+{% endblock %}

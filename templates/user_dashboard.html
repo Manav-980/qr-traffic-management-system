@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="dashboard-top">
+    <div>
+        <h2>My Vehicle Dashboard</h2>
+        <p>Welcome, <strong>{{ session.user_name }}</strong></p>
+    </div>
+
+    <a class="btn primary" href="{{ url_for('user_add_vehicle') }}">+ Add Vehicle</a>
+</div>
+
+<div class="table-wrap">
+    <table>
+        <thead>
+        <tr>
+            <th>ID</th>
+            <th>Vehicle No</th>
+            <th>Owner</th>
+            <th>Phone</th>
+            <th>QR Code</th>
+            <th>Created</th>
+            <th>Action</th>
+        </tr>
+        </thead>
+
+        <tbody>
+        {% for v in vehicles %}
+            <tr>
+                <td>{{ v.id }}</td>
+                <td>{{ v.vehicle_no }}</td>
+                <td>{{ v.owner_name }}</td>
+                <td>{{ v.phone }}</td>
+                <td>
+                    {% if v.qr_filename %}
+                        <img class="qr-small" src="{{ url_for('static', filename='qr_codes/' ~ v.qr_filename) }}">
+                    {% endif %}
+                </td>
+                <td>{{ v.created_at }}</td>
+                <td class="actions">
+                    <a href="{{ url_for('vehicle_details', vehicle_id=v.id) }}" target="_blank">View</a>
+                    <a href="{{ url_for('download_qr', vehicle_id=v.id) }}">Download QR</a>
+                    <a class="danger-link" href="{{ url_for('user_delete_vehicle', vehicle_id=v.id) }}"
+                       onclick="return confirm('Delete this vehicle?')">Delete</a>
+                </td>
+            </tr>
+        {% else %}
+            <tr>
+                <td colspan="7" class="empty">You have not added any vehicle yet.</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

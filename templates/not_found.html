@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="public-card">
+    <h2>Vehicle Not Found</h2>
+    <p>This QR code is invalid or the vehicle record was deleted.</p>
+    <a class="btn primary" href="{{ url_for('home') }}">Go Home</a>
+</div>
+{% endblock %}
