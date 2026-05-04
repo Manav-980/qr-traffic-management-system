@@ -1,0 +1,13 @@
+# database
+traffic.db
+
+# qr images
+static/qr_codes/
+
+# env
+.env
+
+# python
+__pycache__/
+*.pyc
+.venv/
