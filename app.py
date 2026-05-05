@@ -1,4 +1,3 @@
-
 import os
 import random
 from datetime import datetime
@@ -83,57 +82,73 @@ def init_db():
     conn.close()
 
 def create_qr_template(scan_url, vehicle_no, qr_filename):
-    import qrcode
-    from PIL import Image, ImageDraw, ImageFont
-
-    # Canvas
+    """Generate a blue SCAN ME style QR card and save it."""
     width, height = 760, 980
     blue = "#1689F7"
     white = "#FFFFFF"
     black = "#000000"
-    gray = "#EAF4FF"
+    dark_blue = "#0D6EFD"
 
     img = Image.new("RGB", (width, height), white)
     draw = ImageDraw.Draw(img)
 
-    # Fonts
-    try:
-        title_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 58)
-        sub_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 24)
-        small_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 22)
-    except:
-        title_font = ImageFont.load_default()
-        sub_font = ImageFont.load_default()
-        small_font = ImageFont.load_default()
+    def load_font(size):
+        font_paths = [
+            "DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        ]
+        for font_path in font_paths:
+            try:
+                return ImageFont.truetype(font_path, size)
+            except Exception:
+                pass
+        return ImageFont.load_default()
+
+    title_font = load_font(64)
+    sub_font = load_font(28)
+    badge_font = load_font(32)
+    footer_font = load_font(22)
 
     def center_text(text, y, font, fill):
         bbox = draw.textbbox((0, 0), text, font=font)
         text_w = bbox[2] - bbox[0]
         draw.text(((width - text_w) / 2, y), text, font=font, fill=fill)
 
-    # Main rounded blue card
+    # Main blue card
     card_x, card_y = 90, 70
     card_w, card_h = 580, 830
     draw.rounded_rectangle(
         [card_x, card_y, card_x + card_w, card_y + card_h],
         radius=35,
-        fill=blue
+        fill=blue,
     )
 
-    # Phone icon box
-    phone_x, phone_y = 170, 125
-    draw.rounded_rectangle([phone_x, phone_y, phone_x + 58, phone_y + 95], radius=12, fill=black)
-    draw.rounded_rectangle([phone_x + 10, phone_y + 12, phone_x + 48, phone_y + 70], radius=4, fill=white)
-    draw.ellipse([phone_x + 25, phone_y + 76, phone_x + 35, phone_y + 86], fill=blue)
-
-    # Small scan icon inside phone
-    draw.rectangle([phone_x + 20, phone_y + 30, phone_x + 38, phone_y + 48], outline=black, width=3)
+    # Phone icon
+    phone_x, phone_y = 145, 125
+    draw.rounded_rectangle(
+        [phone_x, phone_y, phone_x + 65, phone_y + 105],
+        radius=13,
+        fill=black,
+    )
+    draw.rounded_rectangle(
+        [phone_x + 12, phone_y + 14, phone_x + 53, phone_y + 78],
+        radius=5,
+        fill=white,
+    )
+    draw.ellipse(
+        [phone_x + 28, phone_y + 84, phone_x + 38, phone_y + 94],
+        fill=blue,
+    )
+    draw.rectangle(
+        [phone_x + 24, phone_y + 36, phone_x + 42, phone_y + 54],
+        outline=black,
+        width=3,
+    )
 
     # Header text
-   # Header
-    draw.text((285, 120), "SCAN ME", font=title_font, fill="black")
-    draw.text((285, 200), "Hold the camera", font=sub_font, fill="white")
-    draw.text((285, 240), "to the QR code", font=sub_font, fill="white")
+    draw.text((255, 118), "SCAN ME", font=title_font, fill=black)
+    draw.text((260, 202), "Hold the camera", font=sub_font, fill=white)
+    draw.text((260, 238), "to the QR code", font=sub_font, fill=white)
 
     # QR white box
     qr_box_x, qr_box_y = 125, 300
@@ -141,7 +156,7 @@ def create_qr_template(scan_url, vehicle_no, qr_filename):
     draw.rounded_rectangle(
         [qr_box_x, qr_box_y, qr_box_x + qr_box_w, qr_box_y + qr_box_h],
         radius=22,
-        fill=white
+        fill=white,
     )
 
     # Generate QR
@@ -149,41 +164,34 @@ def create_qr_template(scan_url, vehicle_no, qr_filename):
         version=1,
         error_correction=qrcode.constants.ERROR_CORRECT_H,
         box_size=12,
-        border=2
+        border=2,
     )
     qr_obj.add_data(scan_url)
     qr_obj.make(fit=True)
 
-    qr_img = qr_obj.make_image(fill_color="black", back_color="white").convert("RGB")
+    qr_img = qr_obj.make_image(
+        fill_color="black",
+        back_color="white",
+    ).convert("RGB")
     qr_img = qr_img.resize((430, 430))
-
-    # Paste QR
     img.paste(qr_img, (165, 340))
 
-   # Vehicle badge (SAFE FONT LOAD)
-    try:
-        badge_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 32)
-        footer_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 22)
-    except:
-        badge_font = ImageFont.load_default()
-        footer_font = ImageFont.load_default()
+    # Vehicle badge
+    badge_text = f"VEHICLE NO: {vehicle_no}"
+    draw.rounded_rectangle(
+        [145, 770, 615, 825],
+        radius=14,
+        fill=dark_blue,
+    )
+    center_text(badge_text, 783, badge_font, white)
 
-        badge_text = f"VEHICLE NO: {vehicle_no}"
+    # Footer
+    center_text("QR Traffic Management System", 852, footer_font, black)
 
-# Background strip (DRAW BEFORE SAVE)
-    draw.rounded_rectangle([150, 770, 610, 820], radius=12, fill="#0D6EFD")
-
-# Text on strip
-    center_text(badge_text, 780, badge_font, "white")
-
-# Footer
-    center_text("QR Traffic Management System", 840, footer_font, "#222222")
-
-# Save (LAST STEP)
     path = os.path.join(QR_FOLDER, qr_filename)
     img.save(path, quality=95)
-
     return path
+
 
 def generate_otp():
     return str(random.randint(100000, 999999)) if USE_TWILIO_OTP else "123456"
