@@ -82,50 +82,93 @@ def init_db():
     cur.close()
     conn.close()
 
-from PIL import Image, ImageDraw, ImageFont
-import qrcode
-
 def create_qr_template(scan_url, vehicle_no, qr_filename):
+    import qrcode
+    from PIL import Image, ImageDraw, ImageFont
 
-    # Generate QR
-    qr = qrcode.make(scan_url)
-    qr = qr.resize((450, 450))
+    # Canvas
+    width, height = 760, 980
+    blue = "#1689F7"
+    white = "#FFFFFF"
+    black = "#000000"
+    gray = "#EAF4FF"
 
-    # Create canvas
-    img = Image.new("RGB", (700, 850), "#111111")
+    img = Image.new("RGB", (width, height), white)
     draw = ImageDraw.Draw(img)
 
-    # Load fonts
+    # Fonts
     try:
-        title_font = ImageFont.truetype("arial.ttf", 36)
-        text_font = ImageFont.truetype("arial.ttf", 22)
+        title_font = ImageFont.truetype("arialbd.ttf", 58)
+        sub_font = ImageFont.truetype("arialbd.ttf", 24)
+        small_font = ImageFont.truetype("arialbd.ttf", 22)
     except:
         title_font = ImageFont.load_default()
-        text_font = ImageFont.load_default()
+        sub_font = ImageFont.load_default()
+        small_font = ImageFont.load_default()
 
-    # Helper function to center text
-    def center_text(text, y, font, color):
-        w, h = draw.textbbox((0, 0), text, font=font)[2:]
-        draw.text(((700 - w) / 2, y), text, fill=color, font=font)
+    def center_text(text, y, font, fill):
+        bbox = draw.textbbox((0, 0), text, font=font)
+        text_w = bbox[2] - bbox[0]
+        draw.text(((width - text_w) / 2, y), text, font=font, fill=fill)
 
-    # Title
-    center_text("QR PARKING PASS", 40, title_font, "#FFD700")
+    # Main rounded blue card
+    card_x, card_y = 90, 70
+    card_w, card_h = 580, 830
+    draw.rounded_rectangle(
+        [card_x, card_y, card_x + card_w, card_y + card_h],
+        radius=35,
+        fill=blue
+    )
 
-    # Subtitle
-    center_text("Scan to Contact Owner", 100, text_font, "white")
+    # Phone icon box
+    phone_x, phone_y = 170, 125
+    draw.rounded_rectangle([phone_x, phone_y, phone_x + 58, phone_y + 95], radius=12, fill=black)
+    draw.rounded_rectangle([phone_x + 10, phone_y + 12, phone_x + 48, phone_y + 70], radius=4, fill=white)
+    draw.ellipse([phone_x + 25, phone_y + 76, phone_x + 35, phone_y + 86], fill=blue)
 
-    # QR center
-    img.paste(qr, (125, 170))
+    # Small scan icon inside phone
+    draw.rectangle([phone_x + 20, phone_y + 30, phone_x + 38, phone_y + 48], outline=black, width=3)
 
-    # Vehicle text
-    center_text(f"🚗 Vehicle: {vehicle_no}", 650, text_font, "#FFD700")
+    # Header text
+    draw.text((285, 125), "SCAN ME", font=title_font, fill=black)
+    draw.text((285, 195), "Hold the camera", font=sub_font, fill=white)
+    draw.text((285, 225), "to the QR code", font=sub_font, fill=white)
+
+    # QR white box
+    qr_box_x, qr_box_y = 125, 300
+    qr_box_w, qr_box_h = 510, 510
+    draw.rounded_rectangle(
+        [qr_box_x, qr_box_y, qr_box_x + qr_box_w, qr_box_y + qr_box_h],
+        radius=22,
+        fill=white
+    )
+
+    # Generate QR
+    qr_obj = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_H,
+        box_size=12,
+        border=2
+    )
+    qr_obj.add_data(scan_url)
+    qr_obj.make(fit=True)
+
+    qr_img = qr_obj.make_image(fill_color="black", back_color="white").convert("RGB")
+    qr_img = qr_img.resize((430, 430))
+
+    # Paste QR
+    img.paste(qr_img, (165, 340))
+
+    # Vehicle badge
+    badge_text = f"VEHICLE NO: {vehicle_no}"
+    center_text(badge_text, 835, small_font, white)
 
     # Footer
-    center_text("QR Traffic Management System", 750, text_font, "gray")
+    center_text("QR Traffic Management System", 880, small_font, black)
 
     # Save
-    path = f"static/qr_codes/{qr_filename}"
-    img.save(path)
+    path = os.path.join(QR_FOLDER, qr_filename)
+    img.save(path, quality=95)
 
     return path
 
