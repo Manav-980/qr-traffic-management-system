@@ -146,7 +146,7 @@ def create_qr_template(scan_url, vehicle_no, qr_filename):
     )
 
     # Header text
-    draw.text((255, 118), "Contact me!", font=title_font, fill=black)
+    draw.text((255, 118), "SCAN ME", font=title_font, fill=black)
     draw.text((260, 202), "Hold the camera", font=sub_font, fill=white)
     draw.text((260, 238), "to the QR code", font=sub_font, fill=white)
 
