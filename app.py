@@ -83,40 +83,45 @@ def init_db():
     conn.close()
 
 from PIL import Image, ImageDraw, ImageFont
+import qrcode
 
 def create_qr_template(scan_url, vehicle_no, qr_filename):
-    import qrcode
 
     # Generate QR
     qr = qrcode.make(scan_url)
-    qr = qr.resize((500, 500))
+    qr = qr.resize((450, 450))
 
-    # Create background
-    img = Image.new("RGB", (700, 900), "#111111")
+    # Create canvas
+    img = Image.new("RGB", (700, 850), "#111111")
     draw = ImageDraw.Draw(img)
 
-    # Fonts
+    # Load fonts
     try:
-        title_font = ImageFont.truetype("arial.ttf", 40)
-        text_font = ImageFont.truetype("arial.ttf", 25)
+        title_font = ImageFont.truetype("arial.ttf", 36)
+        text_font = ImageFont.truetype("arial.ttf", 22)
     except:
         title_font = ImageFont.load_default()
         text_font = ImageFont.load_default()
 
+    # Helper function to center text
+    def center_text(text, y, font, color):
+        w, h = draw.textbbox((0, 0), text, font=font)[2:]
+        draw.text(((700 - w) / 2, y), text, fill=color, font=font)
+
     # Title
-    draw.text((200, 50), "QR PARKING PASS", fill="#FFD700", font=title_font)
+    center_text("QR PARKING PASS", 40, title_font, "#FFD700")
 
     # Subtitle
-    draw.text((180, 110), "Scan to Contact Owner", fill="white", font=text_font)
+    center_text("Scan to Contact Owner", 100, text_font, "white")
 
-    # QR position
-    img.paste(qr, (100, 180))
+    # QR center
+    img.paste(qr, (125, 170))
 
     # Vehicle text
-    draw.text((200, 700), f"Vehicle: {vehicle_no}", fill="#FFD700", font=text_font)
+    center_text(f"🚗 Vehicle: {vehicle_no}", 650, text_font, "#FFD700")
 
     # Footer
-    draw.text((150, 780), "QR Traffic Management System", fill="gray", font=text_font)
+    center_text("QR Traffic Management System", 750, text_font, "gray")
 
     # Save
     path = f"static/qr_codes/{qr_filename}"
