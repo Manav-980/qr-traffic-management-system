@@ -82,43 +82,47 @@ def init_db():
     cur.close()
     conn.close()
 
+from PIL import Image, ImageDraw, ImageFont
 
 def create_qr_template(scan_url, vehicle_no, qr_filename):
-    poster_width, poster_height = 900, 1150
-    bg_color, yellow, white = (32, 32, 32), (224, 194, 65), (255, 255, 255)
-    poster = Image.new("RGB", (poster_width, poster_height), bg_color)
-    draw = ImageDraw.Draw(poster)
+    import qrcode
+
+    # Generate QR
+    qr = qrcode.make(scan_url)
+    qr = qr.resize((500, 500))
+
+    # Create background
+    img = Image.new("RGB", (700, 900), "#111111")
+    draw = ImageDraw.Draw(img)
+
+    # Fonts
     try:
-        title_font = ImageFont.truetype("arialbd.ttf", 72)
-        small_font = ImageFont.truetype("arialbd.ttf", 34)
-        tiny_font = ImageFont.truetype("arial.ttf", 24)
-    except Exception:
-        title_font = small_font = tiny_font = ImageFont.load_default()
+        title_font = ImageFont.truetype("arial.ttf", 40)
+        text_font = ImageFont.truetype("arial.ttf", 25)
+    except:
+        title_font = ImageFont.load_default()
+        text_font = ImageFont.load_default()
 
-    for text, y in [("SCAN TO", 65), ("CONTACT OWNER", 145)]:
-        box = draw.textbbox((0, 0), text, font=title_font)
-        draw.text(((poster_width - (box[2]-box[0])) / 2, y), text, fill=yellow, font=title_font)
+    # Title
+    draw.text((200, 50), "QR PARKING PASS", fill="#FFD700", font=title_font)
 
-    qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_H, box_size=14, border=2)
-    qr.add_data(scan_url)
-    qr.make(fit=True)
-    qr_img = qr.make_image(fill_color="black", back_color="white").convert("RGB").resize((650, 650))
+    # Subtitle
+    draw.text((180, 110), "Scan to Contact Owner", fill="white", font=text_font)
 
-    draw.rounded_rectangle([105, 285, 795, 975], radius=18, fill=yellow)
-    draw.rectangle([125, 305, 775, 955], fill=white)
-    poster.paste(qr_img, (125, 305))
+    # QR position
+    img.paste(qr, (100, 180))
 
-    vehicle_text = f"VEHICLE NO: {vehicle_no}"
-    box = draw.textbbox((0, 0), vehicle_text, font=small_font)
-    draw.text(((poster_width - (box[2]-box[0])) / 2, 1000), vehicle_text, fill=yellow, font=small_font)
-    footer = "QR TRAFFIC MANAGEMENT SYSTEM"
-    box = draw.textbbox((0, 0), footer, font=tiny_font)
-    draw.text(((poster_width - (box[2]-box[0])) / 2, 1060), footer, fill=white, font=tiny_font)
+    # Vehicle text
+    draw.text((200, 700), f"Vehicle: {vehicle_no}", fill="#FFD700", font=text_font)
 
-    path = os.path.join(QR_FOLDER, qr_filename)
-    poster.save(path, quality=95)
+    # Footer
+    draw.text((150, 780), "QR Traffic Management System", fill="gray", font=text_font)
+
+    # Save
+    path = f"static/qr_codes/{qr_filename}"
+    img.save(path)
+
     return path
-
 
 def generate_otp():
     return str(random.randint(100000, 999999)) if USE_TWILIO_OTP else "123456"
