@@ -130,9 +130,10 @@ def create_qr_template(scan_url, vehicle_no, qr_filename):
     draw.rectangle([phone_x + 20, phone_y + 30, phone_x + 38, phone_y + 48], outline=black, width=3)
 
     # Header text
-    draw.text((285, 125), "SCAN ME", font=title_font, fill=black)
-    draw.text((285, 195), "Hold the camera", font=sub_font, fill=white)
-    draw.text((285, 225), "to the QR code", font=sub_font, fill=white)
+   # Header
+    draw.text((285, 120), "SCAN ME", font=title_font, fill="black")
+    draw.text((285, 200), "Hold the camera", font=sub_font, fill="white")
+    draw.text((285, 240), "to the QR code", font=sub_font, fill="white")
 
     # QR white box
     qr_box_x, qr_box_y = 125, 300
@@ -159,16 +160,27 @@ def create_qr_template(scan_url, vehicle_no, qr_filename):
     # Paste QR
     img.paste(qr_img, (165, 340))
 
-    # Vehicle badge
-    badge_text = f"VEHICLE NO: {vehicle_no}"
-    center_text(badge_text, 835, small_font, white)
+   # Vehicle badge (bigger + bold + higher position)
+    badge_font = ImageFont.truetype("arialbd.ttf", 32)
 
-    # Footer
-    center_text("QR Traffic Management System", 880, small_font, black)
+    badge_text = f"VEHICLE NO: {vehicle_no}"
+    center_text(badge_text, 780, badge_font, white)
+
+
+# Footer (smaller + better spacing)
+    footer_font = ImageFont.truetype("arialbd.ttf", 22)
+
+    center_text("QR Traffic Management System", 840, footer_font, "#222222")
 
     # Save
     path = os.path.join(QR_FOLDER, qr_filename)
     img.save(path, quality=95)
+
+    # Background strip
+    draw.rounded_rectangle([150, 770, 610, 820], radius=12, fill="#0D6EFD")
+
+# Text on strip
+    center_text(badge_text, 780, badge_font, "white")
 
     return path
 
