@@ -160,27 +160,28 @@ def create_qr_template(scan_url, vehicle_no, qr_filename):
     # Paste QR
     img.paste(qr_img, (165, 340))
 
-   # Vehicle badge (bigger + bold + higher position)
-    badge_font = ImageFont.truetype("arialbd.ttf", 32)
+   # Vehicle badge (SAFE FONT LOAD)
+    try:
+        badge_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 32)
+        footer_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 22)
+    except:
+        badge_font = ImageFont.load_default()
+        footer_font = ImageFont.load_default()
 
-    badge_text = f"VEHICLE NO: {vehicle_no}"
-    center_text(badge_text, 780, badge_font, white)
+        badge_text = f"VEHICLE NO: {vehicle_no}"
 
-
-# Footer (smaller + better spacing)
-    footer_font = ImageFont.truetype("arialbd.ttf", 22)
-
-    center_text("QR Traffic Management System", 840, footer_font, "#222222")
-
-    # Save
-    path = os.path.join(QR_FOLDER, qr_filename)
-    img.save(path, quality=95)
-
-    # Background strip
+# Background strip (DRAW BEFORE SAVE)
     draw.rounded_rectangle([150, 770, 610, 820], radius=12, fill="#0D6EFD")
 
 # Text on strip
     center_text(badge_text, 780, badge_font, "white")
+
+# Footer
+    center_text("QR Traffic Management System", 840, footer_font, "#222222")
+
+# Save (LAST STEP)
+    path = os.path.join(QR_FOLDER, qr_filename)
+    img.save(path, quality=95)
 
     return path
 
