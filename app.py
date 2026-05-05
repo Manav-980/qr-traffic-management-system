@@ -98,9 +98,9 @@ def create_qr_template(scan_url, vehicle_no, qr_filename):
 
     # Fonts
     try:
-        title_font = ImageFont.truetype("arialbd.ttf", 58)
-        sub_font = ImageFont.truetype("arialbd.ttf", 24)
-        small_font = ImageFont.truetype("arialbd.ttf", 22)
+        title_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 58)
+        sub_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 24)
+        small_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 22)
     except:
         title_font = ImageFont.load_default()
         sub_font = ImageFont.load_default()
@@ -487,13 +487,34 @@ def delete_vehicle(vehicle_id):
 
 @app.route("/download-qr/<int:vehicle_id>")
 def download_qr(vehicle_id):
-    vehicle = one("SELECT * FROM vehicles WHERE id=%s", (vehicle_id,))
-    if not vehicle or not vehicle["qr_filename"]:
-        flash("QR code not found.", "danger"); return redirect(url_for("home"))
-    path = os.path.join(QR_FOLDER, vehicle["qr_filename"])
-    if not os.path.exists(path):
-        create_qr_template(url_for("vehicle_details", vehicle_id=vehicle_id, _external=True), vehicle["vehicle_no"], vehicle["qr_filename"])
-    return send_file(path, as_attachment=True)
+    try:
+        vehicle = one("SELECT * FROM vehicles WHERE id=%s", (vehicle_id,))
+
+        if not vehicle:
+            return "Vehicle not found", 404
+
+        qr_filename = vehicle.get("qr_filename")
+
+        if not qr_filename:
+            qr_filename = f"vehicle_{vehicle_id}.png"
+            execute(
+                "UPDATE vehicles SET qr_filename=%s WHERE id=%s",
+                (qr_filename, vehicle_id)
+            )
+
+        path = os.path.join(QR_FOLDER, qr_filename)
+
+        if not os.path.exists(path):
+            create_qr_template(
+                url_for("vehicle_details", vehicle_id=vehicle_id, _external=True),
+                vehicle["vehicle_no"],
+                qr_filename
+            )
+
+        return send_file(path, as_attachment=True)
+
+    except Exception as e:
+        return f"Download QR Error: {str(e)}", 500
 
 
 @app.route("/export/excel")
