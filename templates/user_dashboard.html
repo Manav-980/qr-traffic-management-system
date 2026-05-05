@@ -33,7 +33,7 @@
                 <td>{{ v.phone }}</td>
                 <td>
                     {% if v.qr_filename %}
-                        <img class="qr-small" src="{{ url_for('static', filename='qr_codes/' ~ v.qr_filename) }}">
+                       <img class="qr-small" src="{{ url_for('download_qr', vehicle_id=v.id) }}">
                     {% endif %}
                 </td>
                 <td>{{ v.created_at }}</td>
