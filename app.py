@@ -144,12 +144,14 @@ def create_qr_template(scan_url, vehicle_no, qr_filename):
         outline=black,
         width=3,
     )
+    def center_text(text, y, font, color):
+        w = draw.textlength(text, font=font)
+        draw.text(((width - w) / 2, y), text, font=font, fill=color)
 
-    # Header text
-    draw.text((255, 118), "SCAN ME", font=title_font, fill=black)
-    draw.text((260, 202), "Hold the camera", font=sub_font, fill=white)
-    draw.text((260, 238), "to the QR code", font=sub_font, fill=white)
-
+        center_text("Contact me!", 120, title_font, black)
+        center_text("Hold the camera", 200, sub_font, white)
+        center_text("to the QR code", 240, sub_font, white)
+    
     # QR white box
     qr_box_x, qr_box_y = 125, 300
     qr_box_w, qr_box_h = 510, 510

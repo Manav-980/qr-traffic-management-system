@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h2>Admin Analytics</h2>
+
+<div class="cards">
+    <div class="card analytics-card">
+        <h3>Total Users</h3>
+        <p class="big-number">{{ total_users }}</p>
+    </div>
+
+    <div class="card analytics-card">
+        <h3>Total Vehicles</h3>
+        <p class="big-number">{{ total_vehicles }}</p>
+    </div>
+
+    <div class="card analytics-card">
+        <h3>Vehicles Added Today</h3>
+        <p class="big-number">{{ today_vehicles }}</p>
+    </div>
+</div>
+
+<br>
+
+<div class="table-wrap">
+    <table>
+        <thead>
+        <tr>
+            <th>Vehicle No</th>
+            <th>Owner</th>
+            <th>Phone</th>
+            <th>Created At</th>
+        </tr>
+        </thead>
+
+        <tbody>
+        {% for v in recent_vehicles %}
+        <tr>
+            <td>{{ v.vehicle_no }}</td>
+            <td>{{ v.owner_name }}</td>
+            <td>{{ v.phone }}</td>
+            <td>{{ v.created_at }}</td>
+        </tr>
+        {% else %}
+        <tr>
+            <td colspan="4" class="empty">No recent vehicle data</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
