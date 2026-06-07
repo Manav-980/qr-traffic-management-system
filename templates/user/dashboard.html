@@ -1,0 +1,8 @@
+{% extends 'base.html' %}{% block content %}
+<h1>User Dashboard</h1>
+<div class="actions"><a class="btn" href="{{ url_for('user_add_vehicle') }}">Add Vehicle</a></div>
+<div class="table-wrap"><table>
+<thead><tr><th>ID</th><th>Vehicle No</th><th>Owner</th><th>Phone</th><th>Type</th><th>QR</th><th>Action</th></tr></thead><tbody>
+{% for v in vehicles %}<tr><td>{{v.id}}</td><td>{{v.vehicle_no}}</td><td>{{v.owner_name}}</td><td>{{v.phone}}</td><td>{{v.vehicle_type}}</td><td><a class="small" href="{{ url_for('download_qr', vehicle_id=v.id) }}">Download QR</a></td><td><a class="small" href="{{ url_for('user_edit_vehicle', vehicle_id=v.id) }}">Edit</a> <a class="small danger-link" onclick="return confirm('Delete vehicle?')" href="{{ url_for('user_delete_vehicle', vehicle_id=v.id) }}">Delete</a></td></tr>{% else %}<tr><td colspan="7">No vehicles found.</td></tr>{% endfor %}
+</tbody></table></div>
+{% endblock %}

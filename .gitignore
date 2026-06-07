@@ -1,8 +1,7 @@
-.env
 .venv/
 __pycache__/
-*.pyc
-traffic.db
+parking.db
 *.db
-static/qr_codes/
-exports/
+static/uploads/*
+static/qr_codes/*
+exports/*

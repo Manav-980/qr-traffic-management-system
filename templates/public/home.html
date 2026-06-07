@@ -1,0 +1,11 @@
+{% extends 'base.html' %}{% block content %}
+<section class="hero">
+  <h1>Smart QR-Based Parking Management System</h1>
+  <p>Manage vehicles, users and QR codes with separate Admin and User dashboards.</p>
+  <div class="actions">
+    <a class="btn" href="{{ url_for('admin_login') }}">Admin Login</a>
+    <a class="btn secondary" href="{{ url_for('user_login') }}">User Login</a>
+    <a class="btn outline" href="{{ url_for('user_register') }}">Create User Account</a>
+  </div>
+</section>
+{% endblock %}

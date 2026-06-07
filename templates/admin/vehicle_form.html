@@ -1,0 +1,12 @@
+{% extends 'base.html' %}{% block content %}
+<div class="form-card wide"><h2>{{ action }} Vehicle</h2>
+<form method="post" class="grid2">
+  <div><label>Vehicle Number</label><input name="vehicle_no" value="{{ vehicle.vehicle_no if vehicle else '' }}" required></div>
+  <div><label>Owner Name</label><input name="owner_name" value="{{ vehicle.owner_name if vehicle else '' }}" required></div>
+  <div><label>Phone</label><input name="phone" value="{{ vehicle.phone if vehicle else '' }}" required></div>
+  <div><label>Vehicle Type</label><input name="vehicle_type" placeholder="Car/Bike" value="{{ vehicle.vehicle_type if vehicle else '' }}" required></div>
+  <div><label>Model</label><input name="model" value="{{ vehicle.model if vehicle else '' }}"></div>
+  <div><label>Color</label><input name="color" value="{{ vehicle.color if vehicle else '' }}"></div>
+  <button class="btn" type="submit">Save Vehicle</button>
+</form></div>
+{% endblock %}

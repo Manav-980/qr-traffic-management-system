@@ -1,0 +1,11 @@
+{% extends 'base.html' %}{% block content %}
+<h1>Admin Dashboard</h1>
+<div class="grid3">
+  <div class="stat"><h3>{{ stats.users }}</h3><p>Total Users</p></div>
+  <div class="stat"><h3>{{ stats.vehicles }}</h3><p>Total Vehicles</p></div>
+  <div class="stat"><h3>{{ stats.admins }}</h3><p>Total Admins</p></div>
+</div>
+<div class="actions"><a class="btn" href="{{ url_for('admin_add_vehicle') }}">Add Vehicle</a><a class="btn secondary" href="{{ url_for('export_vehicles') }}">Export CSV</a></div>
+<h2>Latest Vehicles</h2>
+{% include 'admin/table.html' with context %}
+{% endblock %}

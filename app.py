@@ -1,560 +1,849 @@
 import os
-import random
+import re
+import csv
+import base64
+import sqlite3
+import logging
 from datetime import datetime
 from functools import wraps
 
-import pandas as pd
-import psycopg2
-import psycopg2.extras
+from flask import (
+    Flask,
+    render_template,
+    request,
+    redirect,
+    url_for,
+    session,
+    flash,
+    send_file,
+)
+from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
+
 import qrcode
-from fpdf import FPDF
 from PIL import Image, ImageDraw, ImageFont
-from flask import Flask, render_template, request, redirect, url_for, session, flash, send_file
 
-try:
-    from dotenv import load_dotenv
-    from twilio.rest import Client
-except Exception:
-    load_dotenv = None
-    Client = None
+# Set up logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger(__name__)
 
-if load_dotenv:
-    load_dotenv()
+# =========================================================
+# PATH CONFIG
+# =========================================================
+
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+DB_PATH = os.path.join(BASE_DIR, "parking.db")
+
+QR_DIR = os.path.join(BASE_DIR, "static", "qr_codes")
+UPLOAD_DIR = os.path.join(BASE_DIR, "static", "uploads")
+EXPORT_DIR = os.path.join(BASE_DIR, "exports")
+
+for folder in [QR_DIR, UPLOAD_DIR, EXPORT_DIR]:
+    os.makedirs(folder, exist_ok=True)
+
+
+# =========================================================
+# FLASK CONFIG
+# =========================================================
 
 app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY", "change_this_secret_key")
+app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "qr-parking-system-secure-fallback")
+app.config["UPLOAD_FOLDER"] = UPLOAD_DIR
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16MB limit
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-USE_TWILIO_OTP = os.getenv("USE_TWILIO_OTP", "false").lower() == "true"
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
-TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER", "")
 
-QR_FOLDER = os.path.join("static", "qr_codes")
-EXPORT_FOLDER = "exports"
-os.makedirs(QR_FOLDER, exist_ok=True)
-os.makedirs(EXPORT_FOLDER, exist_ok=True)
-
+# =========================================================
+# DATABASE LAYER
+# =========================================================
 
 def get_db():
-    if not DATABASE_URL:
-        raise Exception("DATABASE_URL missing. Add PostgreSQL DATABASE_URL in .env or Render Environment.")
-    return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    """Returns a thread-safe connection and enforces WAL mode & Foreign Keys."""
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.row_factory = sqlite3.Row
+    # Performance & Reliability Tuning
+    conn.execute("PRAGMA foreign_keys = ON;")
+    conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA busy_timeout = 30000;")
+    return conn
+
+
+def now_time():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def init_db():
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS admin (
-            id SERIAL PRIMARY KEY,
-            username VARCHAR(100) UNIQUE NOT NULL,
-            password VARCHAR(255) NOT NULL
+    with get_db() as conn:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS admins (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS vehicles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vehicle_no TEXT UNIQUE NOT NULL,
+                owner_name TEXT NOT NULL,
+                phone TEXT NOT NULL,
+                vehicle_type TEXT NOT NULL,
+                address TEXT,
+                qr_filename TEXT,
+                created_by TEXT NOT NULL,
+                user_id INTEGER,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_vehicles_no ON vehicles(vehicle_no);
+            CREATE INDEX IF NOT EXISTS idx_vehicles_user ON vehicles(user_id);
+            """
         )
-    """)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY,
-            name VARCHAR(150) NOT NULL,
-            email VARCHAR(150) UNIQUE NOT NULL,
-            phone VARCHAR(20) NOT NULL,
-            password VARCHAR(255) NOT NULL,
-            created_at VARCHAR(50)
-        )
-    """)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS vehicles (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-            vehicle_no VARCHAR(50) UNIQUE NOT NULL,
-            owner_name VARCHAR(150) NOT NULL,
-            phone VARCHAR(20) NOT NULL,
-            address TEXT,
-            qr_filename VARCHAR(255),
-            created_at VARCHAR(50)
-        )
-    """)
-    cur.execute("SELECT id FROM admin WHERE username=%s", ("admin",))
-    if cur.fetchone() is None:
-        cur.execute("INSERT INTO admin(username,password) VALUES(%s,%s)", ("admin", "admin123"))
-    conn.commit()
-    cur.close()
-    conn.close()
 
-def create_qr_template(scan_url, vehicle_no, qr_filename):
-    """Generate a blue SCAN ME style QR card and save it."""
-    width, height = 760, 980
-    blue = "#1689F7"
-    white = "#FFFFFF"
-    black = "#000000"
-    dark_blue = "#0D6EFD"
-
-    img = Image.new("RGB", (width, height), white)
-    draw = ImageDraw.Draw(img)
-
-    def load_font(size):
-        font_paths = [
-            "DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        ]
-        for font_path in font_paths:
-            try:
-                return ImageFont.truetype(font_path, size)
-            except Exception:
-                pass
-        return ImageFont.load_default()
-
-    title_font = load_font(64)
-    sub_font = load_font(28)
-    badge_font = load_font(32)
-    footer_font = load_font(22)
-
-    def center_text(text, y, font, fill):
-        bbox = draw.textbbox((0, 0), text, font=font)
-        text_w = bbox[2] - bbox[0]
-        draw.text(((width - text_w) / 2, y), text, font=font, fill=fill)
-
-    # Main blue card
-    card_x, card_y = 90, 70
-    card_w, card_h = 580, 830
-    draw.rounded_rectangle(
-        [card_x, card_y, card_x + card_w, card_y + card_h],
-        radius=35,
-        fill=blue,
-    )
-
-    # Phone icon
-    phone_x, phone_y = 145, 125
-    draw.rounded_rectangle(
-        [phone_x, phone_y, phone_x + 65, phone_y + 105],
-        radius=13,
-        fill=black,
-    )
-    draw.rounded_rectangle(
-        [phone_x + 12, phone_y + 14, phone_x + 53, phone_y + 78],
-        radius=5,
-        fill=white,
-    )
-    draw.ellipse(
-        [phone_x + 28, phone_y + 84, phone_x + 38, phone_y + 94],
-        fill=blue,
-    )
-    draw.rectangle(
-        [phone_x + 24, phone_y + 36, phone_x + 42, phone_y + 54],
-        outline=black,
-        width=3,
-    )
-    def center_text(text, y, font, color):
-        w = draw.textlength(text, font=font)
-        draw.text(((width - w) / 2, y), text, font=font, fill=color)
-
-        center_text("Contact me!", 120, title_font, black)
-        center_text("Hold the camera", 200, sub_font, white)
-        center_text("to the QR code", 240, sub_font, white)
-    
-    # QR white box
-    qr_box_x, qr_box_y = 125, 300
-    qr_box_w, qr_box_h = 510, 510
-    draw.rounded_rectangle(
-        [qr_box_x, qr_box_y, qr_box_x + qr_box_w, qr_box_y + qr_box_h],
-        radius=22,
-        fill=white,
-    )
-
-    # Generate QR
-    qr_obj = qrcode.QRCode(
-        version=1,
-        error_correction=qrcode.constants.ERROR_CORRECT_H,
-        box_size=12,
-        border=2,
-    )
-    qr_obj.add_data(scan_url)
-    qr_obj.make(fit=True)
-
-    qr_img = qr_obj.make_image(
-        fill_color="black",
-        back_color="white",
-    ).convert("RGB")
-    qr_img = qr_img.resize((430, 430))
-    img.paste(qr_img, (165, 340))
-
-    # Vehicle badge
-    badge_text = f"VEHICLE NO: {vehicle_no}"
-    draw.rounded_rectangle(
-        [145, 770, 615, 825],
-        radius=14,
-        fill=dark_blue,
-    )
-    center_text(badge_text, 783, badge_font, white)
-
-    # Footer
-    center_text("QR Traffic Management System", 852, footer_font, black)
-
-    path = os.path.join(QR_FOLDER, qr_filename)
-    img.save(path, quality=95)
-    return path
+        admin = conn.execute("SELECT * FROM admins WHERE email=?", ("admin@gmail.com",)).fetchone()
+        if not admin:
+            # Modern, explicit scrypt password hashing
+            hashed_pw = generate_password_hash("admin123", method="scrypt")
+            conn.execute(
+                "INSERT INTO admins(name, email, password_hash, created_at) VALUES(?,?,?,?)",
+                ("Admin", "admin@gmail.com", hashed_pw, now_time()),
+            )
+        conn.commit()
 
 
-def generate_otp():
-    return str(random.randint(100000, 999999)) if USE_TWILIO_OTP else "123456"
+# =========================================================
+# GLOBALLY INITIALIZE OCR ENGINE (Prevents multi-second delays per request)
+# =========================================================
+
+try:
+    import cv2
+    import easyocr
+    import numpy as np
+    # Initialize reader once globally. Disabling GPU explicitly if running on CPU setups.
+    ocr_reader = easyocr.Reader(["en"], gpu=os.environ.get("USE_GPU", "False").lower() == "true")
+    OCR_AVAILABLE = True
+except ImportError as e:
+    logger.error(f"OCR dependency missing: {e}. Falling back to manual inputs.")
+    OCR_AVAILABLE = False
 
 
-def send_otp(phone, otp):
-    if not USE_TWILIO_OTP:
-        return "DEMO_OTP"
-    if not Client:
-        raise Exception("Install twilio and python-dotenv")
-    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not TWILIO_PHONE_NUMBER:
-        raise Exception("Twilio credentials missing")
-    clean_phone = phone.strip().replace(" ", "").replace("+91", "")
-    client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-    msg = client.messages.create(body=f"Your QR Traffic System OTP is {otp}", from_=TWILIO_PHONE_NUMBER, to=f"+91{clean_phone}")
-    return msg.sid
+# =========================================================
+# VEHICLE NUMBER PROCESSSING & FUZZY MATCHING
+# =========================================================
+
+STATE_CODES = {
+    "AN", "AP", "AR", "AS", "BR", "CH", "CG", "DD", "DL", "DN", "GA", "GJ",
+    "HR", "HP", "JH", "JK", "KA", "KL", "LA", "LD", "MH", "ML", "MN", "MP",
+    "MZ", "NL", "OD", "OR", "PB", "PY", "RJ", "SK", "TN", "TR", "TS", "UK",
+    "UP", "WB"
+}
 
 
-def one(sql, params=()):
-    conn = get_db(); cur = conn.cursor(); cur.execute(sql, params); row = cur.fetchone(); cur.close(); conn.close(); return row
+def normalize_vehicle_no(text):
+    if not text:
+        return ""
+    return re.sub(r"[^A-Z0-9]", "", str(text).upper().strip())
 
 
-def all_rows(sql, params=()):
-    conn = get_db(); cur = conn.cursor(); cur.execute(sql, params); rows = cur.fetchall(); cur.close(); conn.close(); return rows
+def correct_plate_by_position(text):
+    s = normalize_vehicle_no(text)
+    for word in ["IND", "INDIA", "KIA", "HONDA", "GOOGLE", "LENS", "CAMERA", "BACK", "NUMBER", "PLATE"]:
+        s = s.replace(word, "")
+
+    if len(s) < 6:
+        return s
+
+    letter_from_digit = {"0": "O", "1": "I", "2": "Z", "4": "A", "5": "S", "6": "G", "8": "B"}
+    digit_from_letter = {"O": "0", "Q": "0", "D": "0", "I": "1", "L": "1", "T": "1", "Z": "2", "S": "5", "B": "8", "G": "6"}
+
+    chars = list(s)
+    # Positions 0-1: Letters
+    for i in range(min(2, len(chars))):
+        if chars[i].isdigit():
+            chars[i] = letter_from_digit.get(chars[i], chars[i])
+    # Positions 2-3: Digits
+    for i in range(2, min(4, len(chars))):
+        if chars[i].isalpha():
+            chars[i] = digit_from_letter.get(chars[i], chars[i])
+    # Last 4 characters: Digits
+    if len(chars) >= 8:
+        for i in range(max(4, len(chars) - 4), len(chars)):
+            if chars[i].isalpha():
+                chars[i] = digit_from_letter.get(chars[i], chars[i])
+
+    return "".join(chars)
 
 
-def execute(sql, params=(), returning=False):
-    conn = get_db(); cur = conn.cursor()
+def extract_candidates_from_text(text):
+    raw = normalize_vehicle_no(text)
+    corrected = correct_plate_by_position(raw)
+    possible_texts = {raw, corrected}
+
+    for item in list(possible_texts):
+        possible_texts.add(item.replace("IND", "").replace("INDIA", ""))
+
+    patterns = [
+        r"[A-Z]{2}[0-9]{2}[A-Z]{1,3}[0-9]{4}",
+        r"[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{4}",
+        r"[A-Z]{2}[0-9]{2}[A-Z]{1,4}[0-9]{3,4}",
+    ]
+
+    candidates = []
+    for t in possible_texts:
+        for pattern in patterns:
+            for match in re.finditer(pattern, t):
+                candidate = correct_plate_by_position(match.group())
+                if 8 <= len(candidate) <= 11:
+                    candidates.append(candidate)
+
+    if not candidates and 8 <= len(corrected) <= 12:
+        candidates.append(corrected)
+
+    candidates = list(dict.fromkeys(candidates))
+    candidates.sort(key=lambda x: (x[:2] not in STATE_CODES, abs(len(x) - 10), len(x)))
+    return candidates
+
+
+def levenshtein_distance(a, b):
+    a, b = normalize_vehicle_no(a), normalize_vehicle_no(b)
+    if a == b: return 0
+    if not a: return len(b)
+    if not b: return len(a)
+
+    previous = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        current = [i]
+        for j, cb in enumerate(b, 1):
+            insert = current[j - 1] + 1
+            delete = previous[j] + 1
+            replace = previous[j - 1] + (ca != cb)
+            current.append(min(insert, delete, replace))
+        previous = current
+    return previous[-1]
+
+
+def find_best_vehicle_match(candidate):
+    candidate = normalize_vehicle_no(candidate)
+    if not candidate:
+        return None, "", "none"
+
+    with get_db() as conn:
+        exact = conn.execute("SELECT * FROM vehicles WHERE vehicle_no=?", (candidate,)).fetchone()
+        if exact:
+            return exact, candidate, "exact"
+        vehicles = conn.execute("SELECT * FROM vehicles").fetchall()
+
+    best_vehicle, best_distance, best_no = None, 999, candidate
+
+    for vehicle in vehicles:
+        db_no = normalize_vehicle_no(vehicle["vehicle_no"])
+        dist = levenshtein_distance(candidate, db_no)
+
+        if len(candidate) >= 4 and len(db_no) >= 4 and candidate[:2] == db_no[:2]:
+            dist -= 1  # State match weight bonus
+        if len(candidate) >= 2 and len(db_no) >= 2 and candidate[-2:] == db_no[-2:]:
+            dist -= 1  # Unique identifier tail match bonus
+
+        if dist < best_distance:
+            best_distance = dist
+            best_vehicle = vehicle
+            best_no = db_no
+
+    threshold = 2 if len(candidate) <= 10 else 3
+    if best_vehicle and best_distance <= threshold:
+        return best_vehicle, best_no, "fuzzy"
+
+    return None, candidate, "none"
+
+
+# =========================================================
+# REFACTORED OCR PROCESSING ENGINE
+# =========================================================
+
+def extract_plate_text(image_path):
+    if not OCR_AVAILABLE:
+        logger.warning("OCR Engine requested but not available.")
+        return ""
+
     try:
-        cur.execute(sql, params)
-        row = cur.fetchone() if returning else None
-        conn.commit(); return row
+        img = cv2.imread(image_path)
+        if img is None:
+            return ""
+
+        h, w = img.shape[:2]
+        
+        # 1. Focus on the most common plate placement area (Slight crop to remove background noise)
+        main_crop = img[int(h * 0.10):int(h * 0.90), int(w * 0.02):int(w * 0.98)]
+        if main_crop.size == 0:
+            main_crop = img
+
+        # 2. Optimal Preprocessing: Grayscale + Bilateral Filter (Removes noise while keeping edges sharp)
+        gray = cv2.cvtColor(main_crop, cv2.COLOR_BGR2GRAY)
+        gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+        processed_img = cv2.bilateralFilter(gray, 11, 17, 17)
+
+        # 3. First-Pass OCR (The fast path)
+        results = ocr_reader.readtext(processed_img, detail=1, paragraph=False, allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+        results = sorted(results, key=lambda x: (x[0][0][1], x[0][0][0]))
+
+        all_candidates = []
+        parts = [normalize_vehicle_no(text) for _, text, _ in results if normalize_vehicle_no(text)]
+        
+        if parts:
+            joined = "".join(parts)
+            all_candidates.extend(extract_candidates_from_text(joined))
+            
+            # Immediately check if we found a perfect database match to skip further computing
+            for candidate in all_candidates:
+                vehicle, matched_no, mode = find_best_vehicle_match(candidate)
+                if vehicle:
+                    logger.info(f"Fast-path OCR hit: {matched_no} ({mode})")
+                    return matched_no
+
+        # 4. Fallback Path: Only run if the primary method didn't find a matching registered vehicle
+        logger.info("Fast-path missed or yielded no vehicle match. Running adaptive fallback pipeline...")
+        
+        # Fallback variants list (Adaptive Thresholding helps with shadows/bad lighting)
+        adaptive = cv2.adaptiveThreshold(processed_img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 2)
+        
+        for variant in [gray, adaptive]:
+            fallback_results = ocr_reader.readtext(variant, detail=1, paragraph=False, allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+            fallback_results = sorted(fallback_results, key=lambda x: (x[0][0][1], x[0][0][0]))
+            
+            fb_parts = [normalize_vehicle_no(text) for _, text, _ in fallback_results if normalize_vehicle_no(text)]
+            if not fb_parts:
+                continue
+                
+            all_candidates.extend(extract_candidates_from_text("".join(fb_parts)))
+            all_candidates.extend(extract_candidates_from_text(" ".join(fb_parts)))
+
+        # Clean duplicates
+        all_candidates = list(dict.fromkeys(all_candidates))
+
+        if not all_candidates:
+            fallback = extract_candidates_from_text(os.path.basename(image_path))
+            return fallback[0] if fallback else ""
+
+        # Final database matching check over all accumulated candidates
+        for candidate in all_candidates:
+            vehicle, matched_no, mode = find_best_vehicle_match(candidate)
+            if vehicle:
+                return matched_no
+
+        return all_candidates[0]
+
+    except Exception as e:
+        logger.error(f"Error during OCR extraction: {e}")
+        fallback = extract_candidates_from_text(os.path.basename(image_path))
+        return fallback[0] if fallback else ""
+
+# =========================================================
+# QR BADGE GENERATOR
+# =========================================================
+
+def generate_qr_badge(vehicle):
+    vehicle_no = vehicle["vehicle_no"]
+    vehicle_id = vehicle["id"]
+    scan_url = url_for("vehicle_public", vehicle_no=vehicle_no, _external=True)
+
+    qr = qrcode.QRCode(box_size=8, border=2)
+    qr.add_data(scan_url)
+    qr.make(fit=True)
+
+    qr_img = qr.make_image(fill_color="black", back_color="white").convert("RGB").resize((300, 300))
+    badge = Image.new("RGB", (520, 720), "white")
+    draw = ImageDraw.Draw(badge)
+
+    try:
+        title_font = ImageFont.truetype("arialbd.ttf", 30)
+        text_font = ImageFont.truetype("arial.ttf", 22)
+        small_font = ImageFont.truetype("arial.ttf", 17)
     except Exception:
-        conn.rollback(); raise
-    finally:
-        cur.close(); conn.close()
+        title_font = text_font = small_font = None  # System font fallback
+
+    draw.rectangle((0, 0, 520, 720), outline=(14, 165, 233), width=8)
+    draw.rectangle((0, 0, 520, 100), fill=(14, 165, 233))
+    draw.text((58, 30), "QR PARKING SYSTEM", fill="white", font=title_font)
+
+    badge.paste(qr_img, (110, 145))
+    draw.rounded_rectangle((55, 485, 465, 560), radius=18, fill=(240, 249, 255), outline=(14, 165, 233), width=3)
+    draw.text((88, 508), f"VEHICLE NO: {vehicle_no}", fill=(15, 23, 42), font=text_font)
+    draw.text((115, 590), "Scan QR to view vehicle details", fill=(71, 85, 105), font=small_font)
+    draw.text((112, 630), "Smart Parking Verification", fill=(71, 85, 105), font=small_font)
+
+    filename = f"vehicle_{vehicle_id}_{vehicle_no}.png"
+    badge.save(os.path.join(QR_DIR, filename))
+    return filename
 
 
-def admin_required(func):
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        if "admin_id" not in session:
-            flash("Please login as admin first.", "warning")
-            return redirect(url_for("admin_login"))
-        return func(*args, **kwargs)
-    return wrapper
+# =========================================================
+# MIDDLEWARE/DECORATORS
+# =========================================================
+
+def login_required(role):
+    def decorator(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            if role == "admin" and not session.get("admin_id"):
+                flash("Please log in as an administrator.", "warning")
+                return redirect(url_for("admin_login"))
+            if role == "user" and not session.get("user_id"):
+                flash("Please log in to continue.", "warning")
+                return redirect(url_for("user_login"))
+            return fn(*args, **kwargs)
+        return wrapper
+    return decorator
 
 
-def user_required(func):
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        if "user_id" not in session:
-            flash("Please login first.", "warning")
-            return redirect(url_for("user_login"))
-        return func(*args, **kwargs)
-    return wrapper
-
-
-init_db()
-
+# =========================================================
+# CORE APP CONTROLLER ROUTES
+# =========================================================
 
 @app.route("/")
-def home():
+def index():
     return render_template("index.html")
 
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    flash("Logged out successfully.", "success")
+    return redirect(url_for("index"))
+
+
+@app.route("/admin/login", methods=["GET", "POST"])
+def admin_login():
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+
+        with get_db() as conn:
+            admin = conn.execute("SELECT * FROM admins WHERE email=?", (email,)).fetchone()
+
+        if admin and check_password_hash(admin["password_hash"], password):
+            session.clear()
+            session["admin_id"] = admin["id"]
+            session["admin_name"] = admin["name"]
+            flash("Admin session initialized.", "success")
+            return redirect(url_for("admin_dashboard"))
+
+        flash("Invalid administrative credentials.", "danger")
+    return render_template("admin_login.html")
+
+
+@app.route("/admin/dashboard")
+@login_required("admin")
+def admin_dashboard():
+    q = request.args.get("q", "").strip()
+    with get_db() as conn:
+        if q:
+            like = f"%{q}%"
+            vehicles = conn.execute(
+                "SELECT * FROM vehicles WHERE vehicle_no LIKE ? OR owner_name LIKE ? OR phone LIKE ? ORDER BY id DESC",
+                (like, like, like)
+            ).fetchall()
+        else:
+            vehicles = conn.execute("SELECT * FROM vehicles ORDER BY id DESC").fetchall()
+
+        stats = {
+            "total_users": conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"],
+            "total_vehicles": conn.execute("SELECT COUNT(*) c FROM vehicles").fetchone()["c"], # <-- Renamed key
+            "admin_added": conn.execute("SELECT COUNT(*) c FROM vehicles WHERE created_by='admin'").fetchone()["c"],
+            "user_added": conn.execute("SELECT COUNT(*) c FROM vehicles WHERE created_by='user'").fetchone()["c"]
+        }
+
+    return render_template("admin_dashboard.html", vehicles=vehicles, q=q, **stats)
+
+@app.route("/admin/users")
+@login_required("admin")
+def admin_users():
+    with get_db() as conn:
+        users = conn.execute("SELECT * FROM users ORDER BY id DESC").fetchall()
+    return render_template("admin_users.html", users=users)
+
+
+@app.route("/admin/add-vehicle", methods=["GET", "POST"])
+@login_required("admin")
+def admin_add_vehicle():
+    if request.method == "POST":
+        return save_vehicle("admin", None, "admin_dashboard")
+    return render_template("vehicle_form.html", title="Register Vehicle", vehicle=None, action=url_for("admin_add_vehicle"))
+
+
+@app.route("/admin/edit-vehicle/<int:vehicle_id>", methods=["GET", "POST"])
+@login_required("admin")
+def admin_edit_vehicle(vehicle_id):
+    with get_db() as conn:
+        vehicle = conn.execute("SELECT * FROM vehicles WHERE id=?", (vehicle_id,)).fetchone()
+
+    if not vehicle:
+        flash("Vehicle record not found.", "danger")
+        return redirect(url_for("admin_dashboard"))
+
+    if request.method == "POST":
+        return update_vehicle(vehicle_id, "admin_dashboard")
+    return render_template("vehicle_form.html", title="Modify Vehicle Data", vehicle=vehicle, action=url_for("admin_edit_vehicle", vehicle_id=vehicle_id))
+
+
+@app.route("/admin/delete-vehicle/<int:vehicle_id>")
+@login_required("admin")
+def admin_delete_vehicle(vehicle_id):
+    with get_db() as conn:
+        vehicle = conn.execute("SELECT * FROM vehicles WHERE id=?", (vehicle_id,)).fetchone()
+        if vehicle and vehicle["qr_filename"]:
+            try:
+                os.remove(os.path.join(QR_DIR, vehicle["qr_filename"]))
+            except OSError:
+                pass
+        conn.execute("DELETE FROM vehicles WHERE id=?", (vehicle_id,))
+        conn.commit()
+
+    flash("Vehicle deletion completed.", "success")
+    return redirect(url_for("admin_dashboard"))
+
+
+# =========================================================
+# END-USER INTERFACES
+# =========================================================
 
 @app.route("/user/register", methods=["GET", "POST"])
 def user_register():
     if request.method == "POST":
         name = request.form.get("name", "").strip()
         email = request.form.get("email", "").strip().lower()
-        phone = request.form.get("phone", "").strip()
-        password = request.form.get("password", "").strip()
-        if not name or not email or not phone or not password:
-            flash("All fields are required.", "danger"); return redirect(url_for("user_register"))
-        if one("SELECT id FROM users WHERE email=%s", (email,)):
-            flash("Email already registered.", "danger"); return redirect(url_for("user_register"))
-        otp = generate_otp()
-        session["pending_user"] = {"name": name, "email": email, "phone": phone, "password": password}
-        session["user_register_otp"] = otp
-        try:
-            send_otp(phone, otp)
-            flash("OTP sent to your mobile number." if USE_TWILIO_OTP else "Demo OTP mode active. Use OTP: 123456", "success" if USE_TWILIO_OTP else "warning")
-            return redirect(url_for("verify_user_otp"))
-        except Exception as e:
-            flash(f"OTP sending failed: {e}", "danger")
-    return render_template("user_register.html")
+        password = request.form.get("password", "")
 
+        if not name or not email or not password:
+            flash("All profile parameters are required.", "danger")
+            return redirect(url_for("user_register"))
 
-@app.route("/user/verify-otp", methods=["GET", "POST"])
-def verify_user_otp():
-    if "pending_user" not in session:
-        flash("No pending registration found.", "danger"); return redirect(url_for("user_register"))
-    if request.method == "POST":
-        if request.form.get("otp", "").strip() != session.get("user_register_otp"):
-            flash("Invalid OTP. Please try again.", "danger"); return redirect(url_for("verify_user_otp"))
-        u = session["pending_user"]
         try:
-            execute("INSERT INTO users(name,email,phone,password,created_at) VALUES(%s,%s,%s,%s,%s)",
-                    (u["name"], u["email"], u["phone"], u["password"], datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-            session.pop("pending_user", None); session.pop("user_register_otp", None)
-            flash("OTP verified. Registration successful. Please login.", "success")
+            with get_db() as conn:
+                conn.execute(
+                    "INSERT INTO users(name, email, password_hash, created_at) VALUES(?,?,?,?)",
+                    (name, email, generate_password_hash(password, method="scrypt"), now_time()),
+                )
+                conn.commit()
+            flash("Account provisioned. Please authenticate.", "success")
             return redirect(url_for("user_login"))
-        except psycopg2.errors.UniqueViolation:
-            flash("Email already registered.", "danger")
-    return render_template("verify_user_otp.html")
+        except sqlite3.IntegrityError:
+            flash("Email domain already registered.", "danger")
 
-
-@app.route("/user/resend-otp")
-def resend_user_otp():
-    if "pending_user" not in session:
-        flash("No pending registration found.", "danger"); return redirect(url_for("user_register"))
-    otp = generate_otp(); session["user_register_otp"] = otp
-    send_otp(session["pending_user"]["phone"], otp)
-    flash("OTP resent." if USE_TWILIO_OTP else "Demo OTP resent. Use OTP: 123456", "success" if USE_TWILIO_OTP else "warning")
-    return redirect(url_for("verify_user_otp"))
+    return render_template("user_register.html")
 
 
 @app.route("/user/login", methods=["GET", "POST"])
 def user_login():
     if request.method == "POST":
         email = request.form.get("email", "").strip().lower()
-        password = request.form.get("password", "").strip()
-        user = one("SELECT * FROM users WHERE email=%s AND password=%s", (email, password))
-        if user:
-            session.clear(); session["user_id"] = user["id"]; session["user_name"] = user["name"]
-            flash("Login successful.", "success"); return redirect(url_for("user_dashboard"))
-        flash("Invalid email or password.", "danger")
+        password = request.form.get("password", "")
+
+        with get_db() as conn:
+            user = conn.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
+
+        if user and check_password_hash(user["password_hash"], password):
+            session.clear()
+            session["user_id"] = user["id"]
+            session["user_name"] = user["name"]
+            flash("Authentication successful.", "success")
+            return redirect(url_for("user_dashboard"))
+
+        flash("Invalid account email or password.", "danger")
     return render_template("user_login.html")
 
 
-@app.route("/user/logout")
-def user_logout():
-    session.clear(); flash("Logged out successfully.", "success"); return redirect(url_for("user_login"))
-
-
 @app.route("/user/dashboard")
-@user_required
+@login_required("user")
 def user_dashboard():
-    vehicles = all_rows("SELECT * FROM vehicles WHERE user_id=%s ORDER BY id DESC", (session["user_id"],))
+    with get_db() as conn:
+        vehicles = conn.execute("SELECT * FROM vehicles WHERE user_id=? ORDER BY id DESC", (session["user_id"],)).fetchall()
     return render_template("user_dashboard.html", vehicles=vehicles)
 
 
 @app.route("/user/add-vehicle", methods=["GET", "POST"])
-@user_required
+@login_required("user")
 def user_add_vehicle():
     if request.method == "POST":
-        vehicle_no = request.form.get("vehicle_no", "").upper().strip()
-        address = request.form.get("address", "").strip()
-        if not vehicle_no:
-            flash("Vehicle number is required.", "danger"); return redirect(url_for("user_add_vehicle"))
-        user = one("SELECT * FROM users WHERE id=%s", (session["user_id"],))
-        try:
-            row = execute("""
-                INSERT INTO vehicles(user_id,vehicle_no,owner_name,phone,address,created_at)
-                VALUES(%s,%s,%s,%s,%s,%s) RETURNING id
-            """, (session["user_id"], vehicle_no, user["name"], user["phone"], address, datetime.now().strftime("%Y-%m-%d %H:%M:%S")), True)
-            vehicle_id = row["id"]; qr_filename = f"vehicle_{vehicle_id}.png"
-            create_qr_template(url_for("vehicle_details", vehicle_id=vehicle_id, _external=True), vehicle_no, qr_filename)
-            execute("UPDATE vehicles SET qr_filename=%s WHERE id=%s", (qr_filename, vehicle_id))
-            flash("Vehicle added and QR generated successfully.", "success"); return redirect(url_for("user_dashboard"))
-        except psycopg2.errors.UniqueViolation:
-            flash("This vehicle number already exists.", "danger")
-    return render_template("user_add_vehicle.html")
+        return save_vehicle("user", session["user_id"], "user_dashboard")
+    return render_template("vehicle_form.html", title="Register Asset", vehicle=None, action=url_for("user_add_vehicle"))
+
+
+@app.route("/user/edit-vehicle/<int:vehicle_id>", methods=["GET", "POST"])
+@login_required("user")
+def user_edit_vehicle(vehicle_id):
+    with get_db() as conn:
+        vehicle = conn.execute("SELECT * FROM vehicles WHERE id=? AND user_id=?", (vehicle_id, session["user_id"])).fetchone()
+
+    if not vehicle:
+        flash("Unauthorized or missing asset file.", "danger")
+        return redirect(url_for("user_dashboard"))
+
+    if request.method == "POST":
+        return update_vehicle(vehicle_id, "user_dashboard", session["user_id"])
+    return render_template("vehicle_form.html", title="Update Asset Info", vehicle=vehicle, action=url_for("user_edit_vehicle", vehicle_id=vehicle_id))
 
 
 @app.route("/user/delete-vehicle/<int:vehicle_id>")
-@user_required
+@login_required("user")
 def user_delete_vehicle(vehicle_id):
-    vehicle = one("SELECT * FROM vehicles WHERE id=%s AND user_id=%s", (vehicle_id, session["user_id"]))
-    if vehicle:
-        if vehicle["qr_filename"]:
-            path = os.path.join(QR_FOLDER, vehicle["qr_filename"])
-            if os.path.exists(path): os.remove(path)
-        execute("DELETE FROM vehicles WHERE id=%s", (vehicle_id,))
-        flash("Vehicle deleted successfully.", "success")
-    else:
-        flash("Vehicle not found.", "danger")
+    with get_db() as conn:
+        vehicle = conn.execute("SELECT * FROM vehicles WHERE id=? AND user_id=?", (vehicle_id, session["user_id"])).fetchone()
+        if vehicle and vehicle["qr_filename"]:
+            try:
+                os.remove(os.path.join(QR_DIR, vehicle["qr_filename"]))
+            except OSError:
+                pass
+        conn.execute("DELETE FROM vehicles WHERE id=? AND user_id=?", (vehicle_id, session["user_id"]))
+        conn.commit()
+
+    flash("Asset profile cleanly expunged.", "success")
     return redirect(url_for("user_dashboard"))
 
 
-@app.route("/admin/login", methods=["GET", "POST"])
-def admin_login():
-    if request.method == "POST":
-        admin = one("SELECT * FROM admin WHERE username=%s AND password=%s", (request.form.get("username", "").strip(), request.form.get("password", "").strip()))
-        if admin:
-            session.clear(); session["admin_id"] = admin["id"]; session["username"] = admin["username"]
-            flash("Admin login successful.", "success"); return redirect(url_for("admin_dashboard"))
-        flash("Invalid admin username or password.", "danger")
-    return render_template("admin_login.html")
+# =========================================================
+# PERSISTENCE DATA LOADER MUTATIONS
+# =========================================================
+
+def save_vehicle(created_by, user_id, redirect_endpoint):
+    vehicle_no = normalize_vehicle_no(request.form.get("vehicle_no", ""))
+    owner_name = request.form.get("owner_name", "").strip()
+    phone = request.form.get("phone", "").strip()
+    vehicle_type = request.form.get("vehicle_type", "").strip()
+    address = request.form.get("address", "").strip()
+
+    if not vehicle_no or not owner_name or not phone or not vehicle_type:
+        flash("Mandatory parameters missing structural data.", "danger")
+        return redirect(request.referrer or url_for(redirect_endpoint))
+
+    try:
+        with get_db() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO vehicles(vehicle_no, owner_name, phone, vehicle_type, address, created_by, user_id, created_at)
+                VALUES(?,?,?,?,?,?,?,?)
+                """,
+                (vehicle_no, owner_name, phone, vehicle_type, address, created_by, user_id, now_time()),
+            )
+            vehicle_id = cur.lastrowid
+            vehicle = conn.execute("SELECT * FROM vehicles WHERE id=?", (vehicle_id,)).fetchone()
+            
+            qr_filename = generate_qr_badge(vehicle)
+            conn.execute("UPDATE vehicles SET qr_filename=? WHERE id=?", (qr_filename, vehicle_id))
+            conn.commit()
+
+        flash("Asset logged and custom verification token prepared.", "success")
+    except sqlite3.IntegrityError:
+        flash("Vehicle registration number identifier collision.", "danger")
+
+    return redirect(url_for(redirect_endpoint))
 
 
-@app.route("/login")
-def login():
-    return redirect(url_for("admin_login"))
+def update_vehicle(vehicle_id, redirect_endpoint, user_id=None):
+    vehicle_no = normalize_vehicle_no(request.form.get("vehicle_no", ""))
+    owner_name = request.form.get("owner_name", "").strip()
+    phone = request.form.get("phone", "").strip()
+    vehicle_type = request.form.get("vehicle_type", "").strip()
+    address = request.form.get("address", "").strip()
+
+    if not vehicle_no or not owner_name or not phone or not vehicle_type:
+        flash("Validation parameters failed schema validation.", "danger")
+        return redirect(request.referrer or url_for(redirect_endpoint))
+
+    try:
+        with get_db() as conn:
+            if user_id:
+                conn.execute(
+                    "UPDATE vehicles SET vehicle_no=?, owner_name=?, phone=?, vehicle_type=?, address=? WHERE id=? AND user_id=?",
+                    (vehicle_no, owner_name, phone, vehicle_type, address, vehicle_id, user_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE vehicles SET vehicle_no=?, owner_name=?, phone=?, vehicle_type=?, address=? WHERE id=?",
+                    (vehicle_no, owner_name, phone, vehicle_type, address, vehicle_id),
+                )
+
+            vehicle = conn.execute("SELECT * FROM vehicles WHERE id=?", (vehicle_id,)).fetchone()
+            if vehicle:
+                # Cleanup old file if renaming
+                if vehicle["qr_filename"]:
+                    try:
+                        os.remove(os.path.join(QR_DIR, vehicle["qr_filename"]))
+                    except OSError:
+                        pass
+                qr_filename = generate_qr_badge(vehicle)
+                conn.execute("UPDATE vehicles SET qr_filename=? WHERE id=?", (qr_filename, vehicle_id))
+            conn.commit()
+
+        flash("Asset structural update committed successfully.", "success")
+    except sqlite3.IntegrityError:
+        flash("Identifier transformation conflicted with registered vehicle.", "danger")
+
+    return redirect(url_for(redirect_endpoint))
 
 
-@app.route("/admin/logout")
-def admin_logout():
-    session.clear(); flash("Admin logged out successfully.", "success"); return redirect(url_for("admin_login"))
+# =========================================================
+# GATEWAY VALIDATIONS & SCANNERS
+# =========================================================
 
-
-@app.route("/admin/dashboard")
-@admin_required
-def admin_dashboard():
-    search = request.args.get("search", "").strip()
-    if search:
-        q = f"%{search}%"
-        vehicles = all_rows("""
-            SELECT vehicles.*, users.email AS user_email FROM vehicles
-            LEFT JOIN users ON vehicles.user_id=users.id
-            WHERE vehicle_no ILIKE %s OR owner_name ILIKE %s OR phone ILIKE %s OR users.email ILIKE %s
-            ORDER BY vehicles.id DESC
-        """, (q, q, q, q))
-    else:
-        vehicles = all_rows("""
-            SELECT vehicles.*, users.email AS user_email FROM vehicles
-            LEFT JOIN users ON vehicles.user_id=users.id
-            ORDER BY vehicles.id DESC
-        """)
-    total = one("SELECT COUNT(*) AS count FROM vehicles")["count"]
-    users_count = one("SELECT COUNT(*) AS count FROM users")["count"]
-    return render_template("admin_dashboard.html", vehicles=vehicles, total=total, users_count=users_count, search=search)
-
-
-@app.route("/dashboard")
-@admin_required
-def dashboard():
-    return redirect(url_for("admin_dashboard"))
-
-
-@app.route("/admin/register-vehicle", methods=["GET", "POST"])
-@admin_required
-def admin_register_vehicle():
-    if request.method == "POST":
-        vehicle_no = request.form.get("vehicle_no", "").upper().strip()
-        owner_name = request.form.get("owner_name", "").strip()
-        phone = request.form.get("phone", "").strip()
-        address = request.form.get("address", "").strip()
-        if not vehicle_no or not owner_name or not phone:
-            flash("Vehicle number, owner name, and phone are required.", "danger"); return redirect(url_for("admin_register_vehicle"))
-        try:
-            row = execute("""
-                INSERT INTO vehicles(user_id,vehicle_no,owner_name,phone,address,created_at)
-                VALUES(%s,%s,%s,%s,%s,%s) RETURNING id
-            """, (None, vehicle_no, owner_name, phone, address, datetime.now().strftime("%Y-%m-%d %H:%M:%S")), True)
-            vehicle_id = row["id"]; qr_filename = f"vehicle_{vehicle_id}.png"
-            create_qr_template(url_for("vehicle_details", vehicle_id=vehicle_id, _external=True), vehicle_no, qr_filename)
-            execute("UPDATE vehicles SET qr_filename=%s WHERE id=%s", (qr_filename, vehicle_id))
-            flash("Vehicle registered and QR generated successfully.", "success"); return redirect(url_for("admin_dashboard"))
-        except psycopg2.errors.UniqueViolation:
-            flash("This vehicle number already exists.", "danger")
-    return render_template("admin_register_vehicle.html")
-
-
-@app.route("/register")
-@admin_required
-def register():
-    return redirect(url_for("admin_register_vehicle"))
-
-
-@app.route("/vehicle/<int:vehicle_id>")
-def vehicle_details(vehicle_id):
-    vehicle = one("SELECT * FROM vehicles WHERE id=%s", (vehicle_id,))
-    if vehicle is None:
-        return render_template("not_found.html"), 404
-    return render_template("vehicle_details.html", vehicle=vehicle)
-
-
-@app.route("/admin/edit/<int:vehicle_id>", methods=["GET", "POST"])
-@admin_required
-def edit_vehicle(vehicle_id):
-    vehicle = one("SELECT * FROM vehicles WHERE id=%s", (vehicle_id,))
-    if vehicle is None:
-        flash("Vehicle not found.", "danger"); return redirect(url_for("admin_dashboard"))
-    if request.method == "POST":
-        try:
-            execute("""
-                UPDATE vehicles SET vehicle_no=%s, owner_name=%s, phone=%s, address=%s WHERE id=%s
-            """, (request.form.get("vehicle_no", "").upper().strip(), request.form.get("owner_name", "").strip(), request.form.get("phone", "").strip(), request.form.get("address", "").strip(), vehicle_id))
-            flash("Vehicle updated successfully.", "success"); return redirect(url_for("admin_dashboard"))
-        except psycopg2.errors.UniqueViolation:
-            flash("Vehicle number already exists.", "danger")
-    return render_template("edit_vehicle.html", vehicle=vehicle)
-
-
-@app.route("/admin/delete/<int:vehicle_id>")
-@admin_required
-def delete_vehicle(vehicle_id):
-    vehicle = one("SELECT * FROM vehicles WHERE id=%s", (vehicle_id,))
-    if vehicle:
-        if vehicle["qr_filename"]:
-            path = os.path.join(QR_FOLDER, vehicle["qr_filename"])
-            if os.path.exists(path): os.remove(path)
-        execute("DELETE FROM vehicles WHERE id=%s", (vehicle_id,))
-        flash("Vehicle deleted successfully.", "success")
-    else:
-        flash("Vehicle not found.", "danger")
-    return redirect(url_for("admin_dashboard"))
+@app.route("/vehicle/<vehicle_no>")
+def vehicle_public(vehicle_no):
+    vehicle_no = normalize_vehicle_no(vehicle_no)
+    with get_db() as conn:
+        vehicle = conn.execute("SELECT * FROM vehicles WHERE vehicle_no=?", (vehicle_no,)).fetchone()
+    return render_template("vehicle_public.html", vehicle=vehicle, vehicle_no=vehicle_no)
 
 
 @app.route("/download-qr/<int:vehicle_id>")
 def download_qr(vehicle_id):
+    with get_db() as conn:
+        vehicle = conn.execute("SELECT * FROM vehicles WHERE id=?", (vehicle_id,)).fetchone()
+
+    if not vehicle:
+        flash("Resource target identity unmapped.", "danger")
+        return redirect(url_for("index"))
+
+    filename = vehicle["qr_filename"]
+    path = os.path.join(QR_DIR, filename if filename else "")
+
+    if not filename or not os.path.exists(path):
+        with get_db() as conn:
+            filename = generate_qr_badge(vehicle)
+            conn.execute("UPDATE vehicles SET qr_filename=? WHERE id=?", (filename, vehicle_id))
+            conn.commit()
+        path = os.path.join(QR_DIR, filename)
+
+    return send_file(path, as_attachment=True)
+
+
+@app.route("/scan-number-plate", methods=["GET", "POST"])
+def scan_number_plate():
+    vehicle, detected_no, matched_no, match_mode, image_url, message = None, None, None, "none", None, None
+
+    if request.method == "POST":
+        manual_no = request.form.get("manual_no", "").strip()
+        image = request.files.get("plate_image")
+
+        if manual_no:
+            detected_no = normalize_vehicle_no(manual_no)
+        elif image and image.filename:
+            filename = secure_filename(image.filename)
+            saved_name = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{filename}"
+            path = os.path.join(UPLOAD_DIR, saved_name)
+            image.save(path)
+
+            image_url = url_for("static", filename=f"uploads/{saved_name}")
+            detected_no = extract_plate_text(path)
+        else:
+            message = "Empty context payload. Upload visual data or fallback string key."
+
+        if detected_no:
+            vehicle, matched_no, match_mode = find_best_vehicle_match(detected_no)
+            if not vehicle:
+                message = "Vehicle metadata missed system directory registration records."
+
+    return render_template(
+        "scan_plate.html",
+        extracted_text=detected_no,
+        matched_no=matched_no,
+        match_mode=match_mode,
+        vehicle=vehicle,
+        image_url=image_url,
+        message=message,
+    )
+
+
+@app.route("/scan-plate-camera", methods=["GET", "POST"])
+def scan_plate_camera():
+    vehicle, detected_no, matched_no, match_mode, image_url, message = None, None, None, "none", None, None
+
+    if request.method == "POST":
+        image_data = request.form.get("camera_image")
+        if image_data and "," in image_data:
+            try:
+                _, encoded = image_data.split(",", 1)
+                image_bytes = base64.b64decode(encoded)
+                filename = f"camera_{datetime.now().strftime('%Y%m%d%H%M%S')}.jpg"
+                path = os.path.join(UPLOAD_DIR, filename)
+
+                with open(path, "wb") as f:
+                    f.write(image_bytes)
+
+                image_url = url_for("static", filename=f"uploads/{filename}")
+                detected_no = extract_plate_text(path)
+
+                if detected_no:
+                    vehicle, matched_no, match_mode = find_best_vehicle_match(detected_no)
+                    if not vehicle:
+                        message = "Target registry match failed on camera validation scan."
+                else:
+                    message = "Image clarity analysis failed positional bounding metrics."
+            except Exception as e:
+                logger.error(f"Camera frame exception processing: {e}")
+                message = "Media payload structural error."
+        else:
+            message = "Media streaming capture error buffer trace empty."
+
+    return render_template(
+        "scan_plate_camera.html",
+        extracted_text=detected_no,
+        matched_no=matched_no,
+        match_mode=match_mode,
+        vehicle=vehicle,
+        image_url=image_url,
+        message=message,
+    )
+
+
+# =========================================================
+# COMPLIANCE REPORT EXPORTS
+# =========================================================
+
+@app.route("/export/vehicles")
+@login_required("admin")
+def export_vehicles():
+    path = os.path.join(EXPORT_DIR, "vehicles_export.csv")
+    with get_db() as conn:
+        vehicles = conn.execute("SELECT * FROM vehicles ORDER BY id DESC").fetchall()
+
     try:
-        vehicle = one("SELECT * FROM vehicles WHERE id=%s", (vehicle_id,))
-
-        if not vehicle:
-            return "Vehicle not found", 404
-
-        qr_filename = vehicle.get("qr_filename")
-
-        if not qr_filename:
-            qr_filename = f"vehicle_{vehicle_id}.png"
-            execute(
-                "UPDATE vehicles SET qr_filename=%s WHERE id=%s",
-                (qr_filename, vehicle_id)
-            )
-
-        path = os.path.join(QR_FOLDER, qr_filename)
-
-        if not os.path.exists(path):
-            create_qr_template(
-                url_for("vehicle_details", vehicle_id=vehicle_id, _external=True),
-                vehicle["vehicle_no"],
-                qr_filename
-            )
-
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["ID", "Vehicle No", "Owner", "Phone", "Type", "Address", "Created By", "Created At"])
+            for v in vehicles:
+                writer.writerow([v["id"], v["vehicle_no"], v["owner_name"], v["phone"], v["vehicle_type"], v["address"], v["created_by"], v["created_at"]])
         return send_file(path, as_attachment=True)
-
-    except Exception as e:
-        return f"Download QR Error: {str(e)}", 500
-
-
-@app.route("/export/excel")
-@admin_required
-def export_excel():
-    rows = all_rows("SELECT vehicle_no,owner_name,phone,address,created_at FROM vehicles ORDER BY id DESC")
-    file_path = os.path.join(EXPORT_FOLDER, "vehicle_records.xlsx")
-    pd.DataFrame(rows).to_excel(file_path, index=False)
-    return send_file(file_path, as_attachment=True)
+    except IOError as e:
+        logger.error(f"Failed to generate CSV export resource: {e}")
+        flash("Export task error occurred.", "danger")
+        return redirect(url_for("admin_dashboard"))
 
 
-@app.route("/export/pdf")
-@admin_required
-def export_pdf():
-    vehicles = all_rows("SELECT vehicle_no,owner_name,phone,address,created_at FROM vehicles ORDER BY id DESC")
-    file_path = os.path.join(EXPORT_FOLDER, "vehicle_records.pdf")
-    pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", "B", 16)
-    pdf.cell(190, 10, "QR Traffic Management - Vehicle Records", ln=True, align="C"); pdf.ln(8)
-    pdf.set_font("Arial", "B", 10)
-    for h,w in [("Vehicle No",35),("Owner",40),("Phone",35),("Address",45),("Created At",35)]: pdf.cell(w, 8, h, border=1)
-    pdf.ln(); pdf.set_font("Arial", "", 9)
-    for v in vehicles:
-        pdf.cell(35, 8, str(v["vehicle_no"])[:16], border=1)
-        pdf.cell(40, 8, str(v["owner_name"])[:18], border=1)
-        pdf.cell(35, 8, str(v["phone"])[:15], border=1)
-        pdf.cell(45, 8, str(v["address"] or "")[:20], border=1)
-        pdf.cell(35, 8, str(v["created_at"])[:16], border=1); pdf.ln()
-    pdf.output(file_path); return send_file(file_path, as_attachment=True)
+# =========================================================
+# MIDDLEWARE EXCEPTION HANDLING BOOTSTRAPS
+# =========================================================
+
+@app.errorhandler(413)
+def request_entity_too_large(error):
+    flash("Asset image configuration bounds error. Keep attachments smaller than 16MB.", "danger")
+    return redirect(request.referrer or url_for("scan_plate_camera"))
+
+
+@app.errorhandler(404)
+def page_not_found(error):
+    return render_template("404.html"), 404
 
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    init_db()
+    # Explicitly handling standard WSGI loop options cleanly.
+    app.run(host="127.0.0.1", port=5000, debug=True)

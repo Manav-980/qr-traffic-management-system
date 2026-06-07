@@ -1,0 +1,16 @@
+{% extends 'base.html' %}{% block content %}
+{% if vehicle %}
+<div class="card details">
+  <h2>Vehicle Verified</h2>
+  <p class="badge">{{ vehicle.vehicle_no }}</p>
+  <p><b>Owner:</b> {{ vehicle.owner_name }}</p>
+  <p><b>Phone:</b> {{ vehicle.phone }}</p>
+  <p><b>Type:</b> {{ vehicle.vehicle_type }}</p>
+  <p><b>Model:</b> {{ vehicle.model or '-' }}</p>
+  <p><b>Color:</b> {{ vehicle.color or '-' }}</p>
+  <p><b>Registered:</b> {{ vehicle.created_at }}</p>
+</div>
+{% else %}
+<div class="card"><h2>Vehicle Not Found</h2></div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,5 @@
+{% extends 'base.html' %}{% block content %}
+<h1>All Vehicles</h1>
+<form class="search" method="get"><input name="search" placeholder="Search vehicle, owner, phone" value="{{ search }}"><button class="btn">Search</button><a class="btn secondary" href="{{ url_for('admin_add_vehicle') }}">Add Vehicle</a></form>
+{% include 'admin/table.html' %}
+{% endblock %}

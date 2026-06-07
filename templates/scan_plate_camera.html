@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="scanner-card">
+  <div class="form-header"><div><p class="eyebrow">Live Camera OCR</p><h1>Live Number Plate Scanner</h1><p>Place the number plate clearly inside the camera frame, then capture and scan.</p></div><div class="form-icon">🎥</div></div>
+  <div class="camera-frame"><video id="camera" autoplay playsinline></video><div class="plate-guide"></div></div>
+  <canvas id="canvas" width="980" height="600" style="display:none"></canvas>
+  <form method="POST" id="scanForm"><input type="hidden" name="camera_image" id="camera_image"></form>
+  <button onclick="captureImage()" class="btn primary">Capture & Scan</button>
+</section>
+{% if extracted_text %}<div class="flash success">Detected Number: <b>{{ extracted_text }}</b></div>{% endif %}
+{% if message %}<div class="flash warning">{{ message }}</div>{% endif %}
+{% if vehicle %}
+<section class="result-card"><h2>Owner Details Found</h2><div class="result-grid"><div><b>Vehicle No</b><span>{{ vehicle.vehicle_no }}</span></div><div><b>Owner Name</b><span>{{ vehicle.owner_name }}</span></div><div><b>Phone</b><span>{{ vehicle.phone }}</span></div><div><b>Vehicle Type</b><span>{{ vehicle.vehicle_type }}</span></div><div class="wide"><b>Address</b><span>{{ vehicle.address }}</span></div></div></section>
+{% endif %}
+<script>
+const video=document.getElementById('camera');
+navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'},audio:false}).then(stream=>{video.srcObject=stream;}).catch(()=>alert('Camera access denied or unavailable.'));
+function captureImage(){const canvas=document.getElementById('canvas');const ctx=canvas.getContext('2d');ctx.drawImage(video,0,0,canvas.width,canvas.height);document.getElementById('camera_image').value=canvas.toDataURL('image/png');document.getElementById('scanForm').submit();}
+</script>
+{% endblock %}

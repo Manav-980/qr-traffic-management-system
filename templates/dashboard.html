@@ -1,67 +1,53 @@
-{% extends "base.html" %}
-
-{% block content %}
-<div class="dashboard-top">
-    <div>
-        <h2>Admin Dashboard</h2>
-        <p>Total Vehicles: <strong>{{ total }}</strong></p>
-    </div>
-
-    <a class="btn primary" href="{{ url_for('register') }}">+ Register Vehicle</a>
+{% extends 'base.html' %}{% block content %}
+<div class="topbar">
+    <h2>Vehicle Dashboard</h2>
+    <a class="btn" href="{{ url_for('add_vehicle') }}">+ Add Vehicle</a>
 </div>
-
-<div class="toolbar">
-    <form method="GET" class="search-form">
-        <input type="text" name="search" value="{{ search }}" placeholder="Search by vehicle, owner, phone">
-        <button class="btn secondary" type="submit">Search</button>
-    </form>
-
-    <div>
-        <a class="btn secondary" href="{{ url_for('export_excel') }}">Export Excel</a>
-        <a class="btn secondary" href="{{ url_for('export_pdf') }}">Export PDF</a>
-    </div>
-</div>
-
-<div class="table-wrap">
+<form class="search">
+    <input name="q" value="{{ q }}" placeholder="Search owner, phone, vehicle no">
+    <button>Search</button>
+    <a href="{{ url_for('export_csv') }}">Export CSV</a>
+</form>
+<div class="table">
     <table>
         <thead>
-        <tr>
-            <th>ID</th>
-            <th>Vehicle No</th>
-            <th>Owner</th>
-            <th>Phone</th>
-            <th>QR Code</th>
-            <th>Created</th>
-            <th>Action</th>
-        </tr>
+            <tr>
+                <th>ID</th>
+                <th>Owner</th>
+                <th>Phone</th>
+                <th>Vehicle No</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Actions</th>
+            </tr>
         </thead>
-
-        <tbody>
-        {% for v in vehicles %}
+        <tbody>{% for v in vehicles %}
             <tr>
-                <td>{{ v.id }}</td>
-                <td>{{ v.vehicle_no }}</td>
-                <td>{{ v.owner_name }}</td>
-                <td>{{ v.phone }}</td>
-                <td>
-                    {% if v.qr_filename %}
-                       <img class="qr-small" src="{{ url_for('download_qr', vehicle_id=v.id) }}">
-                    {% endif %}
-                </td>
-                <td>{{ v.created_at }}</td>
-                <td class="actions">
-                    <a href="{{ url_for('vehicle_details', vehicle_id=v.id) }}" target="_blank">View</a>
-                    <a href="{{ url_for('edit_vehicle', vehicle_id=v.id) }}">Edit</a>
-                    <a class="danger-link" href="{{ url_for('delete_vehicle', vehicle_id=v.id) }}"
-                       onclick="return confirm('Delete this vehicle?')">Delete</a>
-                </td>
-            </tr>
+            <td>{{ v.id }}</td>
+            <td>{{ v.owner_name }}</td>
+            <td>{{ v.phone }}</td>
+            <td><b>{{ v.vehicle_no }}</b></td>
+            <td>{{ v.vehicle_type }}</td>
+            <td>
+                <span class="badge {{ v.status|lower }}">{{ v.status }}</span>
+            </td>
+            <td class="actions">
+                <a href="{{ url_for('vehicle_details', token=v.qr_token) }}">View</a>
+                <a href="{{ url_for('download_qr', id=v.id) }}">QR</a>
+                <a href="{{ url_for('edit_vehicle', id=v.id) }}">Edit</a>
+                <a href="{{ url_for('change_status', id=v.id, status='Parked') }}">Parked</a>
+                <a href="{{ url_for('change_status', id=v.id, status='Exited') }}">Exited</a>
+                <form method="post" action="{{ url_for('delete_vehicle', id=v.id) }}" onsubmit="return confirm('Delete this vehicle?')">
+                    <button>Delete</button>
+                </form>
+            </td>
+        </tr>
         {% else %}
-            <tr>
-                <td colspan="7" class="empty">No vehicle records found.</td>
-            </tr>
+        <tr>
+            <td colspan="7">No vehicles found.</td>
+        </tr>
         {% endfor %}
-        </tbody>
-    </table>
+    </tbody>
+</table>
 </div>
 {% endblock %}

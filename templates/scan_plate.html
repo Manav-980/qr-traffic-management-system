@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="form-card">
+    <div class="form-header">
+        <div><p class="eyebrow">OCR Search</p>
+            <h1>Scan Number Plate</h1>
+            <p>Upload a plate image or enter vehicle number manually to show owner details.</p>
+        </div>
+        <div class="form-icon">🔍</div>
+    </div>
+    <form method="POST" enctype="multipart/form-data" class="vehicle-form">
+        <div class="input-group">
+            <label>Upload Number Plate Image</label>
+            <input type="file" name="plate_image" accept="image/*">
+        </div>
+        <div class="input-group">
+            <label>Enter Vehicle Number</label>
+            <input type="text" name="manual_no" placeholder="RJ14CV0002">
+        </div>
+        <div class="form-actions full">
+            <button type="submit" class="save-btn">Scan & Search</button>
+            <a href="{{ url_for('scan_plate_camera') }}" class="cancel-btn">Live Scanner</a>
+        </div>
+    </form>
+</div>
+
+{% if vehicle %}
+<div class="form-card"><h2>Owner Details Found</h2><div class="result-box">
+    <div class="info-box">
+        <h3>Vehicle Number</h3>
+        <p>{{ vehicle.vehicle_no }}</p>
+    </div>
+    <div class="info-box">
+        <h3>Owner Name</h3>
+        <p>{{ vehicle.owner_name }}</p>
+    </div>
+    <div class="info-box"><h3>Phone</h3>
+        <p>{{ vehicle.phone }}</p></div><div class="info-box"><h3>Vehicle Type</h3><p>{{ vehicle.vehicle_type }}</p></div><div class="info-box full"><h3>Address</h3><p>{{ vehicle.address or 'N/A' }}</p></div></div></div>{% endif %}{% if message %}<div class="result-alert warning">{{ message }}</div>{% endif %}{% endblock %}
