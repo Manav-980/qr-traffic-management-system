@@ -4,6 +4,7 @@ import csv
 import base64
 import sqlite3
 import logging
+import requests
 from datetime import datetime
 from functools import wraps
 
@@ -50,6 +51,7 @@ app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "qr-parking-system-secure-fallback")
 app.config["UPLOAD_FOLDER"] = UPLOAD_DIR
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16MB limit
+OCR_API_KEY = os.environ.get("OCR_API_KEY", "K86971480888957")
 
 
 # =========================================================
@@ -63,6 +65,7 @@ def get_db():
     # Performance & Reliability Tuning
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA synchronous = NORMAL;")
     conn.execute("PRAGMA busy_timeout = 30000;")
     return conn
 
@@ -112,7 +115,6 @@ def init_db():
 
         admin = conn.execute("SELECT * FROM admins WHERE email=?", ("admin@gmail.com",)).fetchone()
         if not admin:
-            # Modern, explicit scrypt password hashing
             hashed_pw = generate_password_hash("admin123", method="scrypt")
             conn.execute(
                 "INSERT INTO admins(name, email, password_hash, created_at) VALUES(?,?,?,?)",
@@ -122,23 +124,7 @@ def init_db():
 
 
 # =========================================================
-# GLOBALLY INITIALIZE OCR ENGINE (Prevents multi-second delays per request)
-# =========================================================
-
-try:
-    import cv2
-    import easyocr
-    import numpy as np
-    # Initialize reader once globally. Disabling GPU explicitly if running on CPU setups.
-    ocr_reader = easyocr.Reader(["en"], gpu=os.environ.get("USE_GPU", "False").lower() == "true")
-    OCR_AVAILABLE = True
-except ImportError as e:
-    logger.error(f"OCR dependency missing: {e}. Falling back to manual inputs.")
-    OCR_AVAILABLE = False
-
-
-# =========================================================
-# VEHICLE NUMBER PROCESSSING & FUZZY MATCHING
+# VEHICLE NUMBER PROCESSING & FUZZY MATCHING
 # =========================================================
 
 STATE_CODES = {
@@ -167,15 +153,12 @@ def correct_plate_by_position(text):
     digit_from_letter = {"O": "0", "Q": "0", "D": "0", "I": "1", "L": "1", "T": "1", "Z": "2", "S": "5", "B": "8", "G": "6"}
 
     chars = list(s)
-    # Positions 0-1: Letters
     for i in range(min(2, len(chars))):
         if chars[i].isdigit():
             chars[i] = letter_from_digit.get(chars[i], chars[i])
-    # Positions 2-3: Digits
     for i in range(2, min(4, len(chars))):
         if chars[i].isalpha():
             chars[i] = digit_from_letter.get(chars[i], chars[i])
-    # Last 4 characters: Digits
     if len(chars) >= 8:
         for i in range(max(4, len(chars) - 4), len(chars)):
             if chars[i].isalpha():
@@ -250,9 +233,9 @@ def find_best_vehicle_match(candidate):
         dist = levenshtein_distance(candidate, db_no)
 
         if len(candidate) >= 4 and len(db_no) >= 4 and candidate[:2] == db_no[:2]:
-            dist -= 1  # State match weight bonus
+            dist -= 1  
         if len(candidate) >= 2 and len(db_no) >= 2 and candidate[-2:] == db_no[-2:]:
-            dist -= 1  # Unique identifier tail match bonus
+            dist -= 1  
 
         if dist < best_distance:
             best_distance = dist
@@ -270,25 +253,19 @@ def find_best_vehicle_match(candidate):
 # REFACTORED OCR PROCESSING ENGINE
 # =========================================================
 
-import requests
-
 def extract_plate_text(image_path):
     """
-    Lightweight cloud OCR implementation using the provided API key.
-    Sends the image data directly to external endpoints, bypassing the 512MB RAM ceiling entirely.
+    Lightweight cloud OCR implementation. Sends the image data directly to 
+    external endpoints, bypassing local resource constraints entirely.
     """
     try:
-        import requests
-        
-        # Define API payload settings with your active key
         payload = {
-            'apikey': 'K86971480888957',  # Your active free API key
+            'apikey': OCR_API_KEY,  # Uses the secure global configuration string
             'language': 'eng',
             'isOverlayRequired': False,
-            'OCREngine': '2'  # Engine 2 is optimized specifically for alphanumeric strings like license plates
+            'OCREngine': '2'
         }
         
-        # Stream the captured photo file directly over HTTPS
         with open(image_path, 'rb') as f:
             response = requests.post(
                 'https://api.ocr.space/parse/image', 
@@ -299,31 +276,25 @@ def extract_plate_text(image_path):
             
         result = response.json()
         
-        # Check if the API successfully recognized string characters
         if result.get("ParsedResults"):
             detected_text = result["ParsedResults"][0].get("ParsedText", "")
             logger.info(f"[API DEBUG] Raw Cloud OCR Output: {detected_text}")
             
-            # Use your built-in high-accuracy positional candidates regex tracker
             candidates = extract_candidates_from_text(detected_text)
             logger.info(f"[API DEBUG] Extracted Candidates: {candidates}")
             
-            # Look up accumulated candidates inside your local SQLite registration database
             for candidate in candidates:
                 vehicle, matched_no, mode = find_best_vehicle_match(candidate)
                 if vehicle:
                     logger.info(f"[API DEBUG] Database Match Located: {matched_no} ({mode})")
                     return matched_no
             
-            # If no exact or fuzzy database hit occurs, return the primary candidate string directly
             return candidates[0] if candidates else ""
             
         return ""
     except Exception as e:
         logger.error(f"[API ERROR] Cloud transmission failure: {e}")
-        # Fall back to file title extraction metric if web data fails
-        fallback = extract_candidates_from_text(os.path.basename(image_path))
-        return fallback[0] if fallback else ""
+        return ""
 
 # =========================================================
 # QR BADGE GENERATOR
@@ -347,7 +318,7 @@ def generate_qr_badge(vehicle):
         text_font = ImageFont.truetype("arial.ttf", 22)
         small_font = ImageFont.truetype("arial.ttf", 17)
     except Exception:
-        title_font = text_font = small_font = None  # System font fallback
+        title_font = text_font = small_font = None  
 
     draw.rectangle((0, 0, 520, 720), outline=(14, 165, 233), width=8)
     draw.rectangle((0, 0, 520, 100), fill=(14, 165, 233))
@@ -409,7 +380,6 @@ def admin_login():
             admin = conn.execute("SELECT * FROM admins WHERE email=?", (email,)).fetchone()
 
         if admin and check_password_hash(admin["password_hash"], password):
-            session.clear()
             session["admin_id"] = admin["id"]
             session["admin_name"] = admin["name"]
             flash("Admin session initialized.", "success")
@@ -435,12 +405,13 @@ def admin_dashboard():
 
         stats = {
             "total_users": conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"],
-            "total_vehicles": conn.execute("SELECT COUNT(*) c FROM vehicles").fetchone()["c"], # <-- Renamed key
+            "total_vehicles": conn.execute("SELECT COUNT(*) c FROM vehicles").fetchone()["c"], 
             "admin_added": conn.execute("SELECT COUNT(*) c FROM vehicles WHERE created_by='admin'").fetchone()["c"],
             "user_added": conn.execute("SELECT COUNT(*) c FROM vehicles WHERE created_by='user'").fetchone()["c"]
         }
 
     return render_template("admin_dashboard.html", vehicles=vehicles, q=q, **stats)
+
 
 @app.route("/admin/users")
 @login_required("admin")
@@ -471,7 +442,6 @@ def admin_edit_vehicle(vehicle_id):
     if request.method == "POST":
         return update_vehicle(vehicle_id, "admin_dashboard")
     return render_template("vehicle_form.html", title="Modify Vehicle Data", vehicle=vehicle, action=url_for("admin_edit_vehicle", vehicle_id=vehicle_id))
-
 
 
 @app.route("/admin/delete-vehicle/<int:vehicle_id>")
@@ -521,7 +491,6 @@ def user_register():
     return render_template("user_register.html")
 
 
-
 @app.route("/user/login", methods=["GET", "POST"])
 def user_login():
     if request.method == "POST":
@@ -532,7 +501,6 @@ def user_login():
             user = conn.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
 
         if user and check_password_hash(user["password_hash"], password):
-            session.clear()
             session["user_id"] = user["id"]
             session["user_name"] = user["name"]
             flash("Authentication successful.", "success")
@@ -556,7 +524,6 @@ def user_add_vehicle():
     if request.method == "POST":
         return save_vehicle("user", session["user_id"], "user_dashboard")
     return render_template("vehicle_form.html", title="Register Asset", vehicle=None, action=url_for("user_add_vehicle"))
-
 
 
 @app.route("/user/edit-vehicle/<int:vehicle_id>", methods=["GET", "POST"])
@@ -655,7 +622,6 @@ def update_vehicle(vehicle_id, redirect_endpoint, user_id=None):
 
             vehicle = conn.execute("SELECT * FROM vehicles WHERE id=?", (vehicle_id,)).fetchone()
             if vehicle:
-                # Cleanup old file if renaming
                 if vehicle["qr_filename"]:
                     try:
                         os.remove(os.path.join(QR_DIR, vehicle["qr_filename"]))
@@ -826,5 +792,4 @@ def page_not_found(error):
 
 if __name__ == "__main__":
     init_db()
-    # Explicitly handling standard WSGI loop options cleanly.
     app.run(host="127.0.0.1", port=5000, debug=True)
