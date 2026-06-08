@@ -790,6 +790,16 @@ def page_not_found(error):
     return render_template("404.html"), 404
 
 
+# --- ADD THIS HOOK RIGHT HERE FOR PRODUCTION INITIALIZATION ---
+@app.before_request
+def initialize_database_on_first_request():
+    """Ensures the SQLite tables exist before processing any web requests."""
+    # This prevents running initialization on static asset file requests
+    if not hasattr(app, '_db_initialized'):
+        init_db()
+        app._db_initialized = True
+
+
 if __name__ == "__main__":
-    init_db()
+    # Fallback for local testing execution blocks
     app.run(host="127.0.0.1", port=5000, debug=True)
