@@ -270,80 +270,58 @@ def find_best_vehicle_match(candidate):
 # REFACTORED OCR PROCESSING ENGINE
 # =========================================================
 
+import requests
+
 def extract_plate_text(image_path):
-    if not OCR_AVAILABLE:
-        logger.warning("OCR Engine requested but not available.")
-        return ""
-
+    """
+    Lightweight cloud OCR implementation using the provided API key.
+    Sends the image data directly to external endpoints, bypassing the 512MB RAM ceiling entirely.
+    """
     try:
-        img = cv2.imread(image_path)
-        if img is None:
-            return ""
-
-        h, w = img.shape[:2]
+        import requests
         
-        # 1. Focus on the most common plate placement area (Slight crop to remove background noise)
-        main_crop = img[int(h * 0.10):int(h * 0.90), int(w * 0.02):int(w * 0.98)]
-        if main_crop.size == 0:
-            main_crop = img
-
-        # 2. Optimal Preprocessing: Grayscale + Bilateral Filter (Removes noise while keeping edges sharp)
-        gray = cv2.cvtColor(main_crop, cv2.COLOR_BGR2GRAY)
-        gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-        processed_img = cv2.bilateralFilter(gray, 11, 17, 17)
-
-        # 3. First-Pass OCR (The fast path)
-        results = ocr_reader.readtext(processed_img, detail=1, paragraph=False, allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
-        results = sorted(results, key=lambda x: (x[0][0][1], x[0][0][0]))
-
-        all_candidates = []
-        parts = [normalize_vehicle_no(text) for _, text, _ in results if normalize_vehicle_no(text)]
+        # Define API payload settings with your active key
+        payload = {
+            'apikey': 'K86971480888957',  # Your active free API key
+            'language': 'eng',
+            'isOverlayRequired': False,
+            'OCREngine': '2'  # Engine 2 is optimized specifically for alphanumeric strings like license plates
+        }
         
-        if parts:
-            joined = "".join(parts)
-            all_candidates.extend(extract_candidates_from_text(joined))
+        # Stream the captured photo file directly over HTTPS
+        with open(image_path, 'rb') as f:
+            response = requests.post(
+                'https://api.ocr.space/parse/image', 
+                files={'image': f}, 
+                data=payload,
+                timeout=15
+            )
             
-            # Immediately check if we found a perfect database match to skip further computing
-            for candidate in all_candidates:
+        result = response.json()
+        
+        # Check if the API successfully recognized string characters
+        if result.get("ParsedResults"):
+            detected_text = result["ParsedResults"][0].get("ParsedText", "")
+            logger.info(f"[API DEBUG] Raw Cloud OCR Output: {detected_text}")
+            
+            # Use your built-in high-accuracy positional candidates regex tracker
+            candidates = extract_candidates_from_text(detected_text)
+            logger.info(f"[API DEBUG] Extracted Candidates: {candidates}")
+            
+            # Look up accumulated candidates inside your local SQLite registration database
+            for candidate in candidates:
                 vehicle, matched_no, mode = find_best_vehicle_match(candidate)
                 if vehicle:
-                    logger.info(f"Fast-path OCR hit: {matched_no} ({mode})")
+                    logger.info(f"[API DEBUG] Database Match Located: {matched_no} ({mode})")
                     return matched_no
-
-        # 4. Fallback Path: Only run if the primary method didn't find a matching registered vehicle
-        logger.info("Fast-path missed or yielded no vehicle match. Running adaptive fallback pipeline...")
-        
-        # Fallback variants list (Adaptive Thresholding helps with shadows/bad lighting)
-        adaptive = cv2.adaptiveThreshold(processed_img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 2)
-        
-        for variant in [gray, adaptive]:
-            fallback_results = ocr_reader.readtext(variant, detail=1, paragraph=False, allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
-            fallback_results = sorted(fallback_results, key=lambda x: (x[0][0][1], x[0][0][0]))
             
-            fb_parts = [normalize_vehicle_no(text) for _, text, _ in fallback_results if normalize_vehicle_no(text)]
-            if not fb_parts:
-                continue
-                
-            all_candidates.extend(extract_candidates_from_text("".join(fb_parts)))
-            all_candidates.extend(extract_candidates_from_text(" ".join(fb_parts)))
-
-        # Clean duplicates
-        all_candidates = list(dict.fromkeys(all_candidates))
-
-        if not all_candidates:
-            fallback = extract_candidates_from_text(os.path.basename(image_path))
-            return fallback[0] if fallback else ""
-
-        # Final database matching check over all accumulated candidates
-        for candidate in all_candidates:
-            vehicle, matched_no, mode = find_best_vehicle_match(candidate)
-            if vehicle:
-                return matched_no
-
-        return all_candidates[0]
-
+            # If no exact or fuzzy database hit occurs, return the primary candidate string directly
+            return candidates[0] if candidates else ""
+            
+        return ""
     except Exception as e:
-        logger.error(f"Error during OCR extraction: {e}")
+        logger.error(f"[API ERROR] Cloud transmission failure: {e}")
+        # Fall back to file title extraction metric if web data fails
         fallback = extract_candidates_from_text(os.path.basename(image_path))
         return fallback[0] if fallback else ""
 
@@ -495,6 +473,7 @@ def admin_edit_vehicle(vehicle_id):
     return render_template("vehicle_form.html", title="Modify Vehicle Data", vehicle=vehicle, action=url_for("admin_edit_vehicle", vehicle_id=vehicle_id))
 
 
+
 @app.route("/admin/delete-vehicle/<int:vehicle_id>")
 @login_required("admin")
 def admin_delete_vehicle(vehicle_id):
@@ -542,6 +521,7 @@ def user_register():
     return render_template("user_register.html")
 
 
+
 @app.route("/user/login", methods=["GET", "POST"])
 def user_login():
     if request.method == "POST":
@@ -576,6 +556,7 @@ def user_add_vehicle():
     if request.method == "POST":
         return save_vehicle("user", session["user_id"], "user_dashboard")
     return render_template("vehicle_form.html", title="Register Asset", vehicle=None, action=url_for("user_add_vehicle"))
+
 
 
 @app.route("/user/edit-vehicle/<int:vehicle_id>", methods=["GET", "POST"])
